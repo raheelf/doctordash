@@ -1,0 +1,2758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DoctorDash — AI Workflow Assistant</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🩺</text></svg>">
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<style>body{margin:0;padding:0;background:#F3F5F7;}</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// ╔════════════════════════════════════════════════════════════════╗
+// ║  PASTE YOUR CLAUDE API KEY BELOW (between the quotes)        ║
+// ║  Then your friend won't need to enter it — it just works!    ║
+// ╚════════════════════════════════════════════════════════════════╝
+var DOCTORDASH_API_KEY = "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";
+
+const {
+  useState,
+  useRef,
+  Fragment
+} = React;
+
+// ─── SMART CLINICAL ENGINE (no API needed — works everywhere) ───────────────
+function generateSOAPNote(quickNotes, patient) {
+  const n = quickNotes.toLowerCase();
+  // Extract vitals
+  const bpMatch = quickNotes.match(/BP\s*(\d+\/\d+)/i);
+  const bp = bpMatch ? bpMatch[1] : null;
+  const hrMatch = quickNotes.match(/HR\s*(\d+)/i);
+  const hr = hrMatch ? hrMatch[1] : null;
+  const wtMatch = quickNotes.match(/(?:wt|weight)\s*(\d+)/i);
+  const wt = wtMatch ? wtMatch[1] : null;
+  const tempMatch = quickNotes.match(/(?:temp|temperature)\s*([\d.]+)/i);
+  const temp = tempMatch ? tempMatch[1] : null;
+  const o2Match = quickNotes.match(/O2\s*(?:sat)?\s*(\d+)/i);
+  const o2 = o2Match ? o2Match[1] : null;
+
+  // Extract age/sex
+  const ageMatch = quickNotes.match(/(\d+)\s*(M|F|yo|y\/o)/i);
+  const age = ageMatch ? ageMatch[1] : patient?.age || "";
+  const sex = ageMatch ? ageMatch[2].toUpperCase() === "M" ? "male" : "female" : patient?.sex === "M" ? "male" : "female";
+
+  // Determine conditions mentioned
+  const conditions = [];
+  const icd = [];
+  if (n.includes("htn") || n.includes("hypertension") || n.includes("blood pressure") || n.includes("bp")) {
+    conditions.push("Essential Hypertension");
+    icd.push("I10");
+  }
+  if (n.includes("dm") || n.includes("diabet") || n.includes("a1c") || n.includes("glucose") || n.includes("metformin")) {
+    conditions.push("Type 2 Diabetes Mellitus");
+    icd.push("E11.9");
+  }
+  if (n.includes("anxiety") || n.includes("gad") || n.includes("anxious")) {
+    conditions.push("Generalized Anxiety Disorder");
+    icd.push("F41.1");
+  }
+  if (n.includes("gerd") || n.includes("reflux") || n.includes("heartburn")) {
+    conditions.push("GERD");
+    icd.push("K21.0");
+  }
+  if (n.includes("asthma") || n.includes("wheez") || n.includes("inhaler")) {
+    conditions.push("Asthma");
+    icd.push("J45.40");
+  }
+  if (n.includes("cholesterol") || n.includes("lipid") || n.includes("statin") || n.includes("hyperlipid")) {
+    conditions.push("Hyperlipidemia");
+    icd.push("E78.5");
+  }
+  if (n.includes("arthri") || n.includes("joint") || n.includes("knee") || n.includes("osteo")) {
+    conditions.push("Osteoarthritis");
+    icd.push("M17.9");
+  }
+  if (n.includes("depress") || n.includes("ssri") || n.includes("sertraline")) {
+    conditions.push("Major Depressive Disorder");
+    icd.push("F32.1");
+  }
+  if (n.includes("edema") || n.includes("swell")) {
+    conditions.push("Peripheral Edema");
+    icd.push("R60.0");
+  }
+  if (n.includes("allerg")) {
+    conditions.push("Allergic Rhinitis");
+    icd.push("J30.9");
+  }
+
+  // Add patient conditions if not already captured
+  if (patient && conditions.length === 0) {
+    patient.conds.forEach(c => {
+      if (c.includes("Diabet")) {
+        conditions.push(c);
+        icd.push("E11.9");
+      } else if (c.includes("Hypert")) {
+        conditions.push(c);
+        icd.push("I10");
+      } else if (c.includes("Anxiety")) {
+        conditions.push(c);
+        icd.push("F41.1");
+      } else if (c.includes("Asthma")) {
+        conditions.push(c);
+        icd.push("J45.40");
+      } else {
+        conditions.push(c);
+        icd.push("—");
+      }
+    });
+  }
+  if (conditions.length === 0) {
+    conditions.push("See clinical notes");
+    icd.push("Z00.00");
+  }
+
+  // Determine trend
+  const improving = n.includes("improv") || n.includes("better") || n.includes("stable") || n.includes("well controlled") || n.includes("lost") || n.includes("down");
+  const worsening = n.includes("worse") || n.includes("increas") || n.includes("elevated") || n.includes("not controlled");
+  const status = improving ? "improving with current management" : worsening ? "suboptimally controlled, requires adjustment" : "stable on current regimen";
+
+  // Build SOAP
+  let subjective = `${age}-year-old ${sex} presents for ${n.includes("f/u") || n.includes("follow") ? "follow-up" : "evaluation"} of ${conditions.slice(0, 2).join(" and ")}.`;
+  subjective += `\nPatient reports: ${quickNotes.replace(/^\d+\s*(M|F)\s*/i, "").trim()}.`;
+  if (improving) subjective += "\nOverall trending in positive direction.";
+  if (n.includes("no") && (n.includes("chest pain") || n.includes("cp"))) subjective += "\nDenies chest pain.";
+  if (n.includes("no") && (n.includes("headache") || n.includes("ha"))) subjective += "\nDenies headaches.";
+  if (n.includes("no") && n.includes("sob")) subjective += "\nDenies shortness of breath.";
+  let objective = "VITALS:";
+  if (bp) objective += `\n  BP: ${bp} mmHg`;
+  if (hr) objective += `\n  HR: ${hr} bpm`;
+  if (wt) objective += `\n  Weight: ${wt} lbs`;
+  if (temp) objective += `\n  Temp: ${temp}°F`;
+  if (o2) objective += `\n  O2 Sat: ${o2}%`;
+  if (!bp && !hr && !wt) objective += "\n  See nursing intake";
+  objective += "\n\nGENERAL: Patient appears well, in no acute distress.";
+  let assessment = conditions.map((c, i) => `${i + 1}. ${c} (${icd[i]}) — ${status}`).join("\n");
+  let plan = "";
+  conditions.forEach((c, i) => {
+    plan += `${i + 1}. ${c}:\n`;
+    if (c.includes("Hypert")) {
+      plan += n.includes("increase") || n.includes("adjust") ? "   - Adjust antihypertensive medication as discussed\n   - Continue lifestyle modifications\n   - Recheck BP in 4-6 weeks\n" : "   - Continue current antihypertensive regimen\n   - Reinforce dietary sodium restriction\n   - Recheck BP at next visit\n";
+    } else if (c.includes("Diabet")) {
+      plan += "   - Continue current glycemic management\n   - Order HbA1c if overdue\n   - Reinforce dietary counseling\n   - Annual eye exam referral if not done\n";
+    } else if (c.includes("Anxiety") || c.includes("Depress")) {
+      plan += "   - Continue current SSRI regimen\n   - Discuss stress management techniques\n   - Follow-up in 3 months\n";
+    } else if (c.includes("Asthma")) {
+      plan += "   - Review inhaler technique\n   - Consider step-up therapy if symptoms persist\n   - Spirometry as scheduled\n";
+    } else if (c.includes("Edema")) {
+      plan += "   - Monitor, consider medication change if worsening\n   - Leg elevation and compression stockings\n   - Recheck in 2-4 weeks\n";
+    } else {
+      plan += "   - Continue current management\n   - Follow-up as needed\n";
+    }
+  });
+  plan += `\nFollow-up: ${n.includes("6 week") ? "6 weeks" : n.includes("3 month") ? "3 months" : n.includes("4 week") ? "4 weeks" : "as scheduled"}`;
+  return `SUBJECTIVE:\n${subjective}\n\nOBJECTIVE:\n${objective}\n\nASSESSMENT:\n${assessment}\n\nPLAN:\n${plan}`;
+}
+function generatePrepBrief(patients) {
+  return patients.map(p => {
+    const lastVisit = p.visits.at(-1);
+    const urgent = p.labs.length > 0;
+    let brief = `■ ${p.name} (${p.age}${p.sex})`;
+    brief += `\n  Conditions: ${p.conds.join(", ")}`;
+    brief += `\n  Current Meds: ${p.meds.join(", ")}`;
+    if (urgent) brief += `\n  ⚠ PENDING: ${p.labs.join(", ")}`;
+    if (lastVisit) {
+      const daysSince = Math.floor((new Date("2026-03-20") - new Date(lastVisit.date)) / 86400000);
+      brief += `\n  Last seen: ${lastVisit.date} (${daysSince} days ago)`;
+      // Extract key action items from last SOAP
+      const soap = lastVisit.soap.toLowerCase();
+      if (soap.includes("recheck") || soap.includes("follow")) brief += "\n  → Due for recheck per previous plan";
+      if (soap.includes("adjust") || soap.includes("increase") || soap.includes("consider")) brief += "\n  → Medication adjustment was discussed — confirm status";
+      if (soap.includes("refer")) brief += "\n  → Referral was ordered — check if completed";
+    }
+    if (p.allg.length > 0) brief += `\n  Allergies: ${p.allg.join(", ")}`;
+    return brief;
+  }).join("\n\n");
+}
+function generateInboxReply(msg, patient) {
+  const body = msg.body.toLowerCase();
+  let reply = `Dear ${msg.from.split(" ")[0]},\n\nThank you for reaching out.`;
+  if (body.includes("refill") || body.includes("running low") || body.includes("medication")) {
+    const med = patient?.meds?.[0] || "your medication";
+    reply += `\n\nI've submitted a refill for ${med} to your pharmacy on file. It should be ready for pickup within 24 hours. If you have any issues, please contact the pharmacy directly and have them fax our office.`;
+  }
+  if (body.includes("swelling") || body.includes("swell") || body.includes("edema")) {
+    reply += `\n\nRegarding the swelling you mentioned — this can sometimes be a side effect of certain medications, particularly calcium channel blockers like amlodipine. I'd like to see you for a follow-up to examine this. Please schedule an appointment this week through our patient portal or call our office.`;
+    reply += `\n\nIn the meantime, try elevating your legs when resting. If you experience sudden shortness of breath, chest pain, or if the swelling becomes severe or painful, please go to the nearest emergency department immediately.`;
+  }
+  if (body.includes("appointment") || body.includes("confirm") || body.includes("schedule")) {
+    reply += `\n\nYour appointment is confirmed as scheduled. Please arrive 10 minutes early and bring your current medication list and insurance card.`;
+  }
+  if (body.includes("inhaler") || body.includes("rescue") || body.includes("breathing") || body.includes("pollen")) {
+    reply += `\n\nIf you're needing your rescue inhaler daily, that suggests your asthma is not optimally controlled. I'd recommend coming in sooner so we can reassess your controller medication. Please call our office to schedule an appointment this week. In the meantime, continue your current controller inhaler as prescribed.`;
+  }
+  if (body.includes("lab") || body.includes("result") || body.includes("numbers")) {
+    reply += `\n\nI'd be happy to review your lab results with you. Rather than explaining complex values over a message, I think it would be most helpful to discuss these during a brief appointment so I can answer all your questions and explain what the numbers mean for your health. Please schedule a follow-up at your convenience.`;
+  }
+  if (body.includes("knee") || body.includes("pain") || body.includes("worse") || body.includes("bother")) {
+    reply += `\n\nRegarding your pain concerns — please schedule a follow-up so we can properly evaluate this. In the meantime, you may use over-the-counter acetaminophen as directed for comfort, and try applying ice for 15-20 minutes at a time.`;
+  }
+  reply += `\n\nPlease don't hesitate to reach out if you have any other questions or concerns.\n\nBest regards,\nDr. [Your Name]`;
+  return reply;
+}
+function generateRosterAI(shifts, doctors) {
+  const results = [];
+
+  // 1. CRITICAL: Weekend coverage gaps
+  [5, 6].forEach(d => {
+    const dayShifts = shifts.filter(s => s.day === d);
+    if (dayShifts.length === 0) {
+      // Find best candidate to fill
+      const candidates = doctors.filter(doc => {
+        const hrs = shifts.filter(s => s.did === doc.id).reduce((a, s) => a + (s.e - s.s), 0);
+        return hrs < doc.max - 6 && doc.pref.includes(d);
+      });
+      const best = candidates[0] || doctors.find(d2 => d2.type === "Locum" || d2.type === "Staff");
+      const usedRooms = [...new Set(shifts.map(s => s.rm))];
+      const freeRoom = RMS.find(r => !usedRooms.includes(r)) || "Room 101";
+      results.push({
+        priority: "high",
+        title: `🚨 No coverage on ${FULL[d]}`,
+        detail: `The clinic is completely unstaffed on ${FULL[d]}. ${best ? `Recommended: Assign ${best.name} (${best.spec}) from 9:00–15:00 in ${freeRoom}. They have capacity remaining.` : "No available providers found — consider hiring a locum."}`,
+        fix: best ? {
+          did: best.id,
+          day: d,
+          s: 9,
+          e: 15,
+          rm: freeRoom,
+          label: `Add ${best.name.split(" ").pop()} to ${DAYS[d]} 9–15`
+        } : null
+      });
+    }
+  });
+
+  // 2. CRITICAL: Weekday zero-coverage hours
+  for (let d = 0; d < 5; d++) {
+    const gapHours = [];
+    for (let h = 8; h < 17; h++) {
+      const covering = shifts.filter(s => s.day === d && s.s <= h && s.e > h);
+      if (covering.length === 0) gapHours.push(h);
+    }
+    if (gapHours.length >= 2) {
+      const startGap = Math.min(...gapHours);
+      const endGap = Math.max(...gapHours) + 1;
+      results.push({
+        priority: "high",
+        title: `⚠ No coverage ${DAYS[d]} ${startGap}:00–${endGap}:00`,
+        detail: `${gapHours.length} hours with zero providers on ${FULL[d]}. Patients arriving during this window will have no physician available.`,
+        fix: null
+      });
+    }
+  }
+
+  // 3. Overwork / burnout risk
+  doctors.forEach(doc => {
+    const docShifts = shifts.filter(s => s.did === doc.id);
+    const hrs = docShifts.reduce((a, s) => a + (s.e - s.s), 0);
+    const pct = Math.round(hrs / doc.max * 100);
+    const daysWorked = [...new Set(docShifts.map(s => s.day))].length;
+    if (pct >= 100) {
+      results.push({
+        priority: "high",
+        title: `🔴 ${doc.name} is over capacity (${pct}%)`,
+        detail: `Scheduled ${hrs}h against ${doc.max}h maximum. This exceeds safe working limits and increases risk of medical errors. Immediate action needed.`,
+        fix: null
+      });
+    } else if (pct > 85) {
+      results.push({
+        priority: "medium",
+        title: `${doc.name} at ${pct}% capacity`,
+        detail: `Scheduled ${hrs}h of ${doc.max}h max across ${daysWorked} days. Approaching burnout threshold. Consider redistributing one shift.`,
+        fix: null
+      });
+    }
+
+    // 4. Consecutive day fatigue
+    const sortedDays = [...new Set(docShifts.map(s => s.day))].sort();
+    let maxConsecutive = 1,
+      current = 1;
+    for (let i = 1; i < sortedDays.length; i++) {
+      if (sortedDays[i] === sortedDays[i - 1] + 1) {
+        current++;
+        maxConsecutive = Math.max(maxConsecutive, current);
+      } else current = 1;
+    }
+    if (maxConsecutive >= 4) {
+      results.push({
+        priority: "medium",
+        title: `${doc.name}: ${maxConsecutive} consecutive days`,
+        detail: `Working ${maxConsecutive} days in a row without a break. Research shows clinical performance degrades significantly after 4+ consecutive days. Recommend inserting a rest day.`,
+        fix: null
+      });
+    }
+
+    // 5. Long shift detection
+    docShifts.forEach(s => {
+      if (s.e - s.s >= 10) {
+        results.push({
+          priority: "medium",
+          title: `${doc.name}: ${s.e - s.s}h shift on ${DAYS[s.day]}`,
+          detail: `Shifts over 10 hours significantly increase fatigue-related errors. Consider splitting into two shorter shifts or adding a relief provider for the afternoon portion.`,
+          fix: null
+        });
+      }
+    });
+  });
+
+  // 6. Single coverage risk
+  const singleCovSlots = [];
+  for (let d = 0; d < 5; d++) {
+    for (let h = 8; h < 17; h++) {
+      const covering = shifts.filter(s => s.day === d && s.s <= h && s.e > h);
+      if (covering.length === 1) singleCovSlots.push({
+        day: d,
+        hour: h,
+        doc: covering[0].did
+      });
+    }
+  }
+  if (singleCovSlots.length > 5) {
+    const worstDay = DAYS[[0, 1, 2, 3, 4].reduce((worst, d) => singleCovSlots.filter(s => s.day === d).length > singleCovSlots.filter(s => s.day === worst).length ? d : worst, 0)];
+    results.push({
+      priority: "medium",
+      title: `${singleCovSlots.length} single-coverage hours this week`,
+      detail: `If the sole provider calls in sick during these hours, the clinic has zero coverage. Worst day: ${worstDay}. Consider adding a backup provider or staggering shifts for overlap.`,
+      fix: null
+    });
+  }
+
+  // 7. Room conflicts (two doctors same room same time)
+  for (let d = 0; d < 7; d++) {
+    const dayShifts = shifts.filter(s => s.day === d);
+    for (let i = 0; i < dayShifts.length; i++) {
+      for (let j = i + 1; j < dayShifts.length; j++) {
+        const a = dayShifts[i],
+          b = dayShifts[j];
+        if (a.rm === b.rm && a.s < b.e && b.s < a.e) {
+          const docA = doctors.find(x => x.id === a.did);
+          const docB = doctors.find(x => x.id === b.did);
+          results.push({
+            priority: "high",
+            title: `🏥 Room conflict: ${a.rm} on ${DAYS[d]}`,
+            detail: `${docA?.name} (${a.s}:00–${a.e}:00) and ${docB?.name} (${b.s}:00–${b.e}:00) are both assigned to ${a.rm}. One must be moved to an available room.`,
+            fix: null
+          });
+        }
+      }
+    }
+  }
+
+  // 8. Specialty distribution analysis
+  const specByDay = {};
+  for (let d = 0; d < 5; d++) {
+    specByDay[d] = [...new Set(shifts.filter(s => s.day === d).map(s => doctors.find(x => x.id === s.did)?.spec).filter(Boolean))];
+  }
+  const allSpecs = [...new Set(doctors.map(d => d.spec))];
+  allSpecs.forEach(spec => {
+    const daysAvailable = Object.entries(specByDay).filter(([_, specs]) => specs.includes(spec)).length;
+    if (daysAvailable <= 1 && doctors.filter(d => d.spec === spec).length > 0) {
+      results.push({
+        priority: "low",
+        title: `${spec} only available ${daysAvailable} day(s)/week`,
+        detail: `Patients needing ${spec} have very limited scheduling options. Consider adding another day for this specialty to reduce wait times and improve access.`,
+        fix: null
+      });
+    }
+  });
+
+  // 9. Peak hour analysis
+  const peakHours = {};
+  for (let h = 8; h < 17; h++) {
+    let total = 0;
+    for (let d = 0; d < 5; d++) total += shifts.filter(s => s.day === d && s.s <= h && s.e > h).length;
+    peakHours[h] = total;
+  }
+  const maxCov = Math.max(...Object.values(peakHours));
+  const minCov = Math.min(...Object.values(peakHours));
+  if (maxCov > 0 && minCov === 0) {
+    const gapHour = Object.entries(peakHours).find(([_, v]) => v === 0);
+    if (gapHour) {
+      results.push({
+        priority: "medium",
+        title: `Coverage drops to zero at ${gapHour[0]}:00`,
+        detail: `Across the week, ${gapHour[0]}:00 has no provider coverage on some days while peak hours have up to ${maxCov} providers. Staggering shift start times would create more even distribution.`,
+        fix: null
+      });
+    }
+  }
+
+  // 10. Underutilized providers
+  doctors.forEach(doc => {
+    const hrs = shifts.filter(s => s.did === doc.id).reduce((a, s) => a + (s.e - s.s), 0);
+    if (hrs < doc.max * 0.4 && hrs > 0) {
+      results.push({
+        priority: "low",
+        title: `${doc.name} underutilized (${Math.round(hrs / doc.max * 100)}%)`,
+        detail: `Only ${hrs}h of ${doc.max}h capacity used. ${doc.spec} expertise is available but not being fully leveraged. Could take on more patients or cover gap hours.`,
+        fix: null
+      });
+    } else if (hrs === 0) {
+      results.push({
+        priority: "medium",
+        title: `${doc.name} has zero shifts scheduled`,
+        detail: `${doc.name} (${doc.spec}, ${doc.type}) is on the roster but has no shifts this week. Either assign shifts or confirm they are on leave.`,
+        fix: null
+      });
+    }
+  });
+
+  // 11. Room utilization
+  const usedRooms = [...new Set(shifts.map(s => s.rm))];
+  const unusedRooms = RMS.filter(r => !usedRooms.includes(r));
+  if (unusedRooms.length > 0) {
+    results.push({
+      priority: "low",
+      title: `${unusedRooms.length} rooms unused all week`,
+      detail: `${unusedRooms.join(", ")} — consider offering to visiting specialists or using for telehealth consultations to increase clinic revenue.`,
+      fix: null
+    });
+  }
+
+  // 12. Schedule efficiency score
+  const totalScheduledHours = shifts.reduce((a, s) => a + (s.e - s.s), 0);
+  const totalCapacity = doctors.reduce((a, d) => a + d.max, 0);
+  const efficiency = Math.round(totalScheduledHours / totalCapacity * 100);
+  const weekdayGaps = [0, 1, 2, 3, 4].reduce((count, d) => {
+    for (let h = 8; h < 17; h++) {
+      if (shifts.filter(s => s.day === d && s.s <= h && s.e > h).length === 0) count++;
+    }
+    return count;
+  }, 0);
+  results.push({
+    priority: efficiency > 70 ? "low" : "medium",
+    title: `📊 Schedule Efficiency Score: ${efficiency}%`,
+    detail: `Using ${totalScheduledHours}h of ${totalCapacity}h total provider capacity. ${weekdayGaps} uncovered weekday hours. ${efficiency > 80 ? "Well optimized." : efficiency > 60 ? "Room for improvement — fill gap hours to increase patient throughput." : "Significant underutilization — consider consolidating schedules or adding patient volume."}`,
+    fix: null
+  });
+
+  // Sort: high first, then medium, then low
+  const order = {
+    high: 0,
+    medium: 1,
+    low: 2
+  };
+  results.sort((a, b) => (order[a.priority] || 2) - (order[b.priority] || 2));
+  return results;
+}
+
+// ─── DATA ───────────────────────────────────────────────────────────────────
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+  FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+  HRS = Array.from({
+    length: 12
+  }, (_, i) => i + 7),
+  RMS = ["Room 101", "Room 102", "Room 103", "Room 104", "Room 201", "Room 202", "Room 203"];
+const C = [{
+  b: "#E8F5E9",
+  r: "#4CAF50",
+  t: "#2E7D32",
+  d: "#4CAF50"
+}, {
+  b: "#E3F2FD",
+  r: "#2196F3",
+  t: "#1565C0",
+  d: "#2196F3"
+}, {
+  b: "#FFF3E0",
+  r: "#FF9800",
+  t: "#E65100",
+  d: "#FF9800"
+}, {
+  b: "#F3E5F5",
+  r: "#9C27B0",
+  t: "#6A1B9A",
+  d: "#9C27B0"
+}, {
+  b: "#E0F7FA",
+  r: "#00BCD4",
+  t: "#00695C",
+  d: "#00BCD4"
+}, {
+  b: "#FBE9E7",
+  r: "#FF5722",
+  t: "#BF360C",
+  d: "#FF5722"
+}, {
+  b: "#FCE4EC",
+  r: "#E91E63",
+  t: "#880E4F",
+  d: "#E91E63"
+}, {
+  b: "#E8EAF6",
+  r: "#3F51B5",
+  t: "#283593",
+  d: "#3F51B5"
+}];
+const initPatients = [{
+  id: "p1",
+  name: "Margaret Chen",
+  age: 67,
+  sex: "F",
+  conds: ["Type 2 Diabetes", "Hypertension", "Osteoarthritis"],
+  meds: ["Metformin 1000mg BID", "Lisinopril 20mg daily", "Acetaminophen PRN"],
+  allg: ["Penicillin"],
+  visits: [{
+    date: "2026-02-12",
+    soap: "S: Improved fasting glucose, occasional knee pain. O: BP 142/88, Wt 168lbs. A: T2DM improving, HTN borderline. P: Continue metformin, consider BP med adjustment, order HbA1c + lipid panel, annual eye exam referral."
+  }],
+  labs: ["HbA1c (overdue 3wk)", "Lipid Panel"]
+}, {
+  id: "p2",
+  name: "James Rodriguez",
+  age: 44,
+  sex: "M",
+  conds: ["Generalized Anxiety Disorder", "GERD"],
+  meds: ["Sertraline 100mg daily", "Omeprazole 20mg daily"],
+  allg: [],
+  visits: [{
+    date: "2026-03-05",
+    soap: "S: Stable on SSRI, sleep improved, heartburn controlled. O: BP 124/78, HR 72. A: GAD stable, GERD controlled. P: Continue meds, f/u 3mo, stress management discussed."
+  }],
+  labs: []
+}, {
+  id: "p3",
+  name: "Priya Sharma",
+  age: 31,
+  sex: "F",
+  conds: ["Asthma (moderate persistent)", "Seasonal Allergies"],
+  meds: ["Fluticasone/Salmeterol 250/50 BID", "Albuterol PRN", "Cetirizine 10mg daily"],
+  allg: ["Sulfa drugs"],
+  visits: [{
+    date: "2026-01-28",
+    soap: "S: 2 exacerbations since Nov, rescue inhaler 3-4x/wk. O: Mild expiratory wheeze, O2 97%. A: Asthma suboptimal. P: Discuss step-up therapy, spirometry scheduled, verify inhaler technique."
+  }],
+  labs: ["Spirometry (Mar 25)"]
+}, {
+  id: "p4",
+  name: "David Park",
+  age: 58,
+  sex: "M",
+  conds: ["Hypertension", "Hyperlipidemia"],
+  meds: ["Amlodipine 5mg daily", "Atorvastatin 40mg daily"],
+  allg: [],
+  visits: [{
+    date: "2026-02-20",
+    soap: "S: BP stable, mild ankle swelling x1 week. O: BP 132/82, bilat 1+ pitting edema. A: HTN controlled, peripheral edema likely CCB-related. P: Monitor, consider ACE-I switch if worsens, recheck 4wk."
+  }],
+  labs: ["BMP (due next visit)"]
+}];
+const initMsgs = [{
+  id: "m1",
+  pid: "p4",
+  from: "David Park",
+  subj: "Medication Refill Request",
+  body: "Hi Doctor, I'm running low on my amlodipine 5mg. Can you send a refill? Also, the ankle swelling seems worse this week. Should I worry?",
+  time: "Mar 20, 8:45am",
+  read: false
+}, {
+  id: "m2",
+  pid: "p3",
+  from: "Priya Sharma",
+  subj: "Spirometry & Inhaler Use",
+  body: "Hello, confirming my spirometry on March 25th. Also needing my rescue inhaler almost daily now with pollen season. Should I come in sooner?",
+  time: "Mar 19, 4:20pm",
+  read: false
+}, {
+  id: "m3",
+  pid: "p1",
+  from: "Margaret Chen",
+  subj: "Lab Results Question",
+  body: "Dr., I saw lab results on my portal but can't read them. Can you explain? Also my knee has been worse lately.",
+  time: "Mar 18, 11:30am",
+  read: true
+}];
+const initDocs = [{
+  id: 1,
+  name: "Dr. Sarah Kim",
+  spec: "Family Medicine",
+  type: "Staff",
+  ci: 0,
+  max: 40,
+  pref: [0, 1, 2, 3, 4],
+  av: "SK"
+}, {
+  id: 2,
+  name: "Dr. Michael Torres",
+  spec: "Internal Medicine",
+  type: "Staff",
+  ci: 1,
+  max: 40,
+  pref: [0, 1, 2, 3, 4],
+  av: "MT"
+}, {
+  id: 3,
+  name: "Dr. Aisha Patel",
+  spec: "Pediatrics",
+  type: "Staff",
+  ci: 2,
+  max: 36,
+  pref: [0, 1, 3, 4],
+  av: "AP"
+}, {
+  id: 4,
+  name: "Dr. James Wu",
+  spec: "Cardiology",
+  type: "Visiting",
+  ci: 3,
+  max: 16,
+  pref: [1, 3],
+  av: "JW"
+}, {
+  id: 5,
+  name: "Dr. Elena Vasquez",
+  spec: "Dermatology",
+  type: "Visiting",
+  ci: 4,
+  max: 12,
+  pref: [0, 4],
+  av: "EV"
+}, {
+  id: 6,
+  name: "Dr. Omar Hassan",
+  spec: "Orthopedics",
+  type: "Consultant",
+  ci: 5,
+  max: 8,
+  pref: [2],
+  av: "OH"
+}];
+const initShifts = [{
+  id: 1,
+  did: 1,
+  day: 0,
+  s: 8,
+  e: 16,
+  rm: "Room 101"
+}, {
+  id: 2,
+  did: 1,
+  day: 2,
+  s: 8,
+  e: 16,
+  rm: "Room 101"
+}, {
+  id: 3,
+  did: 1,
+  day: 3,
+  s: 8,
+  e: 14,
+  rm: "Room 101"
+}, {
+  id: 4,
+  did: 1,
+  day: 4,
+  s: 9,
+  e: 17,
+  rm: "Room 101"
+}, {
+  id: 5,
+  did: 2,
+  day: 0,
+  s: 9,
+  e: 17,
+  rm: "Room 102"
+}, {
+  id: 6,
+  did: 2,
+  day: 1,
+  s: 10,
+  e: 16,
+  rm: "Room 102"
+}, {
+  id: 7,
+  did: 2,
+  day: 2,
+  s: 9,
+  e: 17,
+  rm: "Room 102"
+}, {
+  id: 8,
+  did: 2,
+  day: 3,
+  s: 9,
+  e: 17,
+  rm: "Room 102"
+}, {
+  id: 9,
+  did: 3,
+  day: 0,
+  s: 8,
+  e: 15,
+  rm: "Room 103"
+}, {
+  id: 10,
+  did: 3,
+  day: 1,
+  s: 8,
+  e: 15,
+  rm: "Room 103"
+}, {
+  id: 11,
+  did: 3,
+  day: 3,
+  s: 8,
+  e: 14,
+  rm: "Room 103"
+}, {
+  id: 12,
+  did: 4,
+  day: 1,
+  s: 9,
+  e: 17,
+  rm: "Room 201"
+}, {
+  id: 13,
+  did: 4,
+  day: 3,
+  s: 9,
+  e: 17,
+  rm: "Room 201"
+}, {
+  id: 14,
+  did: 5,
+  day: 0,
+  s: 10,
+  e: 16,
+  rm: "Room 202"
+}, {
+  id: 15,
+  did: 5,
+  day: 4,
+  s: 10,
+  e: 16,
+  rm: "Room 202"
+}, {
+  id: 16,
+  did: 6,
+  day: 2,
+  s: 8,
+  e: 16,
+  rm: "Room 203"
+}];
+
+// Icons
+const Ic = {
+  home: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"
+  }), /*#__PURE__*/React.createElement("polyline", {
+    points: "9 22 9 12 15 12 15 22"
+  })),
+  file: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+  }), /*#__PURE__*/React.createElement("polyline", {
+    points: "14 2 14 8 20 8"
+  })),
+  mail: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"
+  }), /*#__PURE__*/React.createElement("polyline", {
+    points: "22,6 12,13 2,6"
+  })),
+  users: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: "9",
+    cy: "7",
+    r: "4"
+  })),
+  cal: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("rect", {
+    x: "3",
+    y: "4",
+    width: "18",
+    height: "18",
+    rx: "2"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "16",
+    y1: "2",
+    x2: "16",
+    y2: "6"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "8",
+    y1: "2",
+    x2: "8",
+    y2: "6"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "3",
+    y1: "10",
+    x2: "21",
+    y2: "10"
+  })),
+  brain: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M12 2C8.13 2 5 5.13 5 9c0 2.38 1.19 4.47 3 5.74V17a2 2 0 002 2h4a2 2 0 002-2v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.87-3.13-7-7-7z"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "9",
+    y1: "21",
+    x2: "15",
+    y2: "21"
+  })),
+  spark: /*#__PURE__*/React.createElement("svg", {
+    width: "16",
+    height: "16",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("polygon", {
+    points: "12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+  })),
+  plus: /*#__PURE__*/React.createElement("svg", {
+    width: "14",
+    height: "14",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.5",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("line", {
+    x1: "12",
+    y1: "5",
+    x2: "12",
+    y2: "19"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "5",
+    y1: "12",
+    x2: "19",
+    y2: "12"
+  })),
+  send: /*#__PURE__*/React.createElement("svg", {
+    width: "14",
+    height: "14",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("line", {
+    x1: "22",
+    y1: "2",
+    x2: "11",
+    y2: "13"
+  }), /*#__PURE__*/React.createElement("polygon", {
+    points: "22 2 15 22 11 13 2 9 22 2"
+  })),
+  chk: /*#__PURE__*/React.createElement("svg", {
+    width: "13",
+    height: "13",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "3",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("polyline", {
+    points: "20 6 9 17 4 12"
+  })),
+  mic: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M19 10v2a7 7 0 01-14 0v-2"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "12",
+    y1: "19",
+    x2: "12",
+    y2: "23"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "8",
+    y1: "23",
+    x2: "16",
+    y2: "23"
+  })),
+  stop: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("rect", {
+    x: "6",
+    y: "6",
+    width: "12",
+    height: "12",
+    rx: "2"
+  })),
+  key: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.78 7.78 5.5 5.5 0 017.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"
+  }))
+};
+
+// ─── APP ────────────────────────────────────────────────────────────────────
+function App() {
+  const [v, setV] = useState("dash");
+  const [pts, setPts] = useState(initPatients);
+  const [msgs, setMsgs] = useState(initMsgs);
+  const [docs, setDocs] = useState(initDocs);
+  const [shifts, setShifts] = useState(initShifts);
+  const [notif, setNotif] = useState(null);
+  const [selPt, setSelPt] = useState(null);
+  const [soapIn, setSoapIn] = useState("");
+  const [soapOut, setSoapOut] = useState("");
+  const [soapL, setSoapL] = useState(false);
+  const [selMsg, setSelMsg] = useState(null);
+  const [draft, setDraft] = useState("");
+  const [draftL, setDraftL] = useState(false);
+  const [prep, setPrep] = useState("");
+  const [prepL, setPrepL] = useState(false);
+  const [aiRes, setAiRes] = useState([]);
+  const [aiL, setAiL] = useState(false);
+  const [addSh, setAddSh] = useState(false);
+  const [nSh, setNSh] = useState({
+    did: 1,
+    day: 0,
+    s: 9,
+    e: 17,
+    rm: "Room 101"
+  });
+  // API Key — persisted in localStorage (works on GitHub Pages)
+  const [apiKey, setApiKey] = useState(() => {
+    try {
+      return localStorage.getItem("dd_apikey") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [apiKeyInput, setApiKeyInput] = useState(() => {
+    try {
+      return localStorage.getItem("dd_apikey") || "";
+    } catch {
+      return "";
+    }
+  });
+  const saveApiKey = k => {
+    setApiKey(k);
+    try {
+      localStorage.setItem("dd_apikey", k);
+    } catch {}
+  };
+  const clearApiKey = () => {
+    setApiKey("");
+    setApiKeyInput("");
+    try {
+      localStorage.removeItem("dd_apikey");
+    } catch {}
+  };
+  const [addPt, setAddPt] = useState(false);
+  const [nPt, setNPt] = useState({
+    name: "",
+    age: "",
+    sex: "M",
+    conds: "",
+    meds: "",
+    allg: ""
+  });
+  const [addDoc, setAddDoc] = useState(false);
+  const [nDoc, setNDoc] = useState({
+    name: "",
+    spec: "Family Medicine",
+    type: "Staff",
+    max: "40"
+  });
+  const [aiMode, setAiMode] = useState(() => {
+    try {
+      return localStorage.getItem("dd_apikey") ? "live" : "local";
+    } catch {
+      return "local";
+    }
+  });
+  const [isRec, setIsRec] = useState(false);
+  const [recTime, setRecTime] = useState(0);
+  const [transcript, setTranscript] = useState("");
+  const [recStatus, setRecStatus] = useState("");
+  const recognitionRef = useRef(null);
+  const timerRef = useRef(null);
+  const isRecRef = useRef(false);
+  const nid = useRef(20);
+  const fl = (m, t = "success") => {
+    setNotif({
+      m,
+      t
+    });
+    setTimeout(() => setNotif(null), 3000);
+  };
+
+  // ── Extract clinical info from conversation transcript ──
+  function extractClinicalNotes(text) {
+    const t = text.toLowerCase();
+    let notes = [];
+    // Age/Sex
+    const ageM = text.match(/(\d{1,3})\s*(?:year|yr|y\.?o)/i);
+    if (ageM) notes.push(ageM[1] + " year old");
+    if (t.includes("male") || t.includes(" man") || t.includes(" gentleman")) notes.push("male");
+    if (t.includes("female") || t.includes(" woman") || t.includes(" lady")) notes.push("female");
+    // Visit type
+    if (t.includes("follow up") || t.includes("follow-up") || t.includes("came back") || t.includes("returning")) notes.push("f/u visit");
+    if (t.includes("new patient") || t.includes("first time") || t.includes("first visit")) notes.push("new patient visit");
+    // Vitals mentioned
+    const bpM = text.match(/(\d{2,3}\s*(?:over|\/)\s*\d{2,3})/i);
+    if (bpM) notes.push("BP " + bpM[1].replace(/\s*over\s*/i, "/"));
+    const hrM = text.match(/(?:heart rate|pulse|HR)\s*(?:is|of|was)?\s*(\d{2,3})/i);
+    if (hrM) notes.push("HR " + hrM[1]);
+    const wtM = text.match(/(?:weight|weighs?)\s*(?:is|was)?\s*(\d{2,3})\s*(?:pounds|lbs|kg)?/i);
+    if (wtM) notes.push("Wt " + wtM[1]);
+    const tempM = text.match(/(?:temp|temperature)\s*(?:is|of|was)?\s*([\d.]+)/i);
+    if (tempM) notes.push("Temp " + tempM[1]);
+    // Symptoms
+    const symptoms = [];
+    if (t.includes("headache") || t.includes("head ache")) symptoms.push("headache");
+    if (t.includes("chest pain") || t.includes("chest discomfort")) symptoms.push("chest pain");
+    if (t.includes("shortness of breath") || t.includes("short of breath") || t.includes("difficulty breathing")) symptoms.push("SOB");
+    if (t.includes("dizzy") || t.includes("dizziness") || t.includes("lightheaded")) symptoms.push("dizziness");
+    if (t.includes("nausea") || t.includes("nauseous") || t.includes("throwing up") || t.includes("vomit")) symptoms.push("nausea/vomiting");
+    if (t.includes("cough")) symptoms.push("cough");
+    if (t.includes("fever") || t.includes("chills")) symptoms.push("fever/chills");
+    if (t.includes("fatigue") || t.includes("tired") || t.includes("exhausted")) symptoms.push("fatigue");
+    if (t.includes("swelling") || t.includes("swollen") || t.includes("edema")) symptoms.push("swelling");
+    if (t.includes("pain")) {
+      const painM = text.match(/(\w+)\s*pain/i);
+      symptoms.push(painM ? painM[0] : "pain");
+    }
+    if (t.includes("rash") || t.includes("itching") || t.includes("itchy")) symptoms.push("rash/pruritus");
+    if (t.includes("anxiety") || t.includes("anxious") || t.includes("worried") || t.includes("stress")) symptoms.push("anxiety");
+    if (t.includes("insomnia") || t.includes("can't sleep") || t.includes("trouble sleeping")) symptoms.push("insomnia");
+    if (t.includes("numbness") || t.includes("tingling")) symptoms.push("numbness/tingling");
+    if (symptoms.length > 0) notes.push("Symptoms: " + symptoms.join(", "));
+    // Negatives
+    const denies = [];
+    if (t.includes("no chest pain") || t.includes("denies chest pain")) denies.push("chest pain");
+    if (t.includes("no headache") || t.includes("denies headache")) denies.push("headache");
+    if (t.includes("no fever") || t.includes("no chills") || t.includes("afebrile")) denies.push("fever");
+    if (t.includes("no shortness") || t.includes("no difficulty breathing")) denies.push("SOB");
+    if (t.includes("no nausea") || t.includes("no vomiting")) denies.push("nausea/vomiting");
+    if (denies.length > 0) notes.push("Denies: " + denies.join(", "));
+    // Conditions
+    if (t.includes("diabetes") || t.includes("diabetic") || t.includes("blood sugar") || t.includes("a1c")) notes.push("DM discussed");
+    if (t.includes("hypertension") || t.includes("high blood pressure") || t.includes("blood pressure")) notes.push("HTN discussed");
+    if (t.includes("asthma") || t.includes("inhaler") || t.includes("wheez")) notes.push("Asthma discussed");
+    if (t.includes("cholesterol") || t.includes("lipid")) notes.push("Hyperlipidemia discussed");
+    if (t.includes("depression") || t.includes("depressed")) notes.push("Depression discussed");
+    // Medications mentioned
+    const meds = [];
+    const medList = ["metformin", "lisinopril", "amlodipine", "atorvastatin", "omeprazole", "sertraline", "fluticasone", "albuterol", "hydrochlorothiazide", "losartan", "gabapentin", "levothyroxine", "pantoprazole", "ibuprofen", "acetaminophen", "aspirin", "prednisone", "amoxicillin", "azithromycin", "insulin"];
+    medList.forEach(med => {
+      if (t.includes(med)) meds.push(med);
+    });
+    if (meds.length > 0) notes.push("Medications discussed: " + meds.join(", "));
+    // Plan items
+    const planItems = [];
+    if (t.includes("continue") || t.includes("keep taking")) planItems.push("continue current regimen");
+    if (t.includes("increase") || t.includes("raise the dose") || t.includes("bump up")) planItems.push("increase medication dose");
+    if (t.includes("decrease") || t.includes("lower") || t.includes("reduce")) planItems.push("decrease dose");
+    if (t.includes("new medication") || t.includes("start") || t.includes("prescribe") || t.includes("begin")) planItems.push("start new medication");
+    if (t.includes("lab") || t.includes("blood work") || t.includes("blood test")) planItems.push("order labs");
+    if (t.includes("x-ray") || t.includes("xray") || t.includes("imaging") || t.includes("ct scan") || t.includes("mri")) planItems.push("order imaging");
+    if (t.includes("refer") || t.includes("specialist") || t.includes("see a")) planItems.push("referral discussed");
+    if (t.includes("come back") || t.includes("follow up") || t.includes("see you") || t.includes("return")) {
+      const wkM = text.match(/(\d+)\s*weeks?/i);
+      const moM = text.match(/(\d+)\s*months?/i);
+      planItems.push("f/u " + (wkM ? wkM[1] + " weeks" : moM ? moM[1] + " months" : "as needed"));
+    }
+    if (planItems.length > 0) notes.push("Plan: " + planItems.join(", "));
+    // Build output
+    if (notes.length === 0) return text.slice(0, 500);
+    return notes.join(". ") + ".\n\n[Full transcript available for review]";
+  }
+
+  // ── Voice Recording ──
+  const startRecording = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      fl("Speech recognition not supported. Use Chrome or Safari.", "error");
+      return;
+    }
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    let final = transcript;
+    rec.onresult = e => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) final += e.results[i][0].transcript + " ";else interim += e.results[i][0].transcript;
+      }
+      setTranscript(final + interim);
+    };
+    rec.onerror = e => {
+      if (e.error !== "no-speech" && e.error !== "aborted") fl("Mic error: " + e.error, "error");
+    };
+    rec.onend = () => {
+      if (isRecRef.current) {
+        try {
+          rec.start();
+        } catch {}
+      }
+    };
+    rec.start();
+    recognitionRef.current = rec;
+    isRecRef.current = true;
+    setIsRec(true);
+    setRecStatus("listening");
+    setRecTime(0);
+    timerRef.current = setInterval(() => setRecTime(t => t + 1), 1000);
+    fl("Recording started — speak now");
+  };
+  const stopRecording = () => {
+    isRecRef.current = false;
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      recognitionRef.current = null;
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setIsRec(false);
+    setRecStatus("processing");
+    setTimeout(() => {
+      if (transcript.trim()) {
+        const extracted = extractClinicalNotes(transcript);
+        setSoapIn(prev => prev ? prev + "\n\n--- From Recording ---\n" + extracted : extracted);
+        fl("Transcript processed — review notes and generate SOAP");
+      }
+      setRecStatus("");
+    }, 800);
+  };
+  const clearRecording = () => {
+    setTranscript("");
+    setRecTime(0);
+    setRecStatus("");
+  };
+  const formatTime = s => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+
+  // ── Hybrid AI: try real Claude API with API key, fall back to local engine ──
+  const tryLiveAI = async (systemPrompt, userMessage) => {
+    if (!apiKey) return null;
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          messages: [{
+            role: "user",
+            content: systemPrompt + "\n\n" + userMessage
+          }]
+        })
+      });
+      const data = await res.json();
+      if (data.error) return null;
+      const text = data.content.filter(item => item.type === "text").map(item => item.text).join("\n");
+      if (text) {
+        setAiMode("live");
+        return text;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  const genSoap = async () => {
+    if (!soapIn.trim()) return;
+    setSoapL(true);
+    setSoapOut("");
+    const ctx = selPt ? `Patient: ${selPt.name}, ${selPt.age}${selPt.sex}. Conditions: ${selPt.conds.join(", ")}. Meds: ${selPt.meds.join(", ")}. Allergies: ${selPt.allg.join(", ") || "NKDA"}.` : "";
+    // Try live AI first
+    const liveResult = await tryLiveAI(`You are a medical documentation assistant. Generate a SOAP note with ICD-10 codes from the doctor's quick notes. Be concise, clinically accurate, with clear S/O/A/P sections.${ctx ? " Context: " + ctx : ""}`, `Generate SOAP note from: ${soapIn}`);
+    const result = liveResult || generateSOAPNote(soapIn, selPt);
+    if (!liveResult) setAiMode("local");
+    setSoapOut(result);
+    if (selPt) setPts(p => p.map(x => x.id === selPt.id ? {
+      ...x,
+      visits: [...x.visits, {
+        date: "2026-03-20",
+        soap: result
+      }]
+    } : x));
+    setSoapL(false);
+  };
+  const genReply = async () => {
+    if (!selMsg) return;
+    setDraftL(true);
+    setDraft("");
+    const pt = pts.find(p => p.id === selMsg.pid);
+    const ctx = pt ? `Patient: ${pt.name}, ${pt.age}${pt.sex}. Conditions: ${pt.conds.join(", ")}. Meds: ${pt.meds.join(", ")}.` : "";
+    const liveResult = await tryLiveAI(`You are a physician's AI assistant drafting a patient message reply. Professional, empathetic, clinically appropriate. Sign as "Dr. [Your Name]".${ctx ? " Context: " + ctx : ""}`, `Reply to:\nFrom: ${selMsg.from}\nSubject: ${selMsg.subj}\n\n${selMsg.body}`);
+    setDraft(liveResult || generateInboxReply(selMsg, pt));
+    if (!liveResult) setAiMode("local");
+    setDraftL(false);
+  };
+  const genPrep = async () => {
+    setPrepL(true);
+    setPrep("");
+    const sum = pts.map(p => `- ${p.name}, ${p.age}${p.sex}: ${p.conds.join(", ")}. Meds: ${p.meds.join(", ")}. Pending: ${p.labs.join(", ") || "none"}. Last: ${p.visits.at(-1)?.soap?.slice(0, 200) || "none"}`).join("\n");
+    const liveResult = await tryLiveAI("You are a clinical AI generating morning prep briefs. For each patient give 2-3 actionable sentences: key concerns, pending items, what to watch for. Use bullet format with patient names bolded.", `Morning prep for today's patients:\n\n${sum}`);
+    setPrep(liveResult || generatePrepBrief(pts));
+    if (!liveResult) setAiMode("local");
+    setPrepL(false);
+  };
+  const genRosterAI = async () => {
+    setAiL(true);
+    setAiRes([]);
+    await delay(800 + Math.random() * 600);
+    // Roster AI always uses local engine (more reliable for structured output)
+    setAiRes(generateRosterAI(shifts, docs));
+    setAiL(false);
+  };
+  const addShift = () => {
+    setShifts(p => [...p, {
+      id: nid.current++,
+      ...nSh
+    }]);
+    setAddSh(false);
+    fl("Shift added");
+  };
+  const addPatient = () => {
+    setPts(p => [...p, {
+      id: "p" + Date.now(),
+      name: nPt.name,
+      age: +nPt.age || 0,
+      sex: nPt.sex,
+      conds: nPt.conds.split(",").map(s => s.trim()).filter(Boolean),
+      meds: nPt.meds.split(",").map(s => s.trim()).filter(Boolean),
+      allg: nPt.allg.split(",").map(s => s.trim()).filter(Boolean),
+      visits: [],
+      labs: []
+    }]);
+    setAddPt(false);
+    setNPt({
+      name: "",
+      age: "",
+      sex: "M",
+      conds: "",
+      meds: "",
+      allg: ""
+    });
+    fl("Patient added");
+  };
+  const addDoctor = () => {
+    const id = docs.length + 1 + Math.floor(Math.random() * 100);
+    const ci = docs.length % C.length;
+    const av = nDoc.name.split(" ").filter(w => w.length > 0).map(w => w[0].toUpperCase()).slice(0, 2).join("");
+    setDocs(p => [...p, {
+      id,
+      name: nDoc.name.startsWith("Dr.") ? nDoc.name : "Dr. " + nDoc.name,
+      spec: nDoc.spec,
+      type: nDoc.type,
+      ci,
+      max: +nDoc.max || 40,
+      pref: nDoc.type === "Staff" ? [0, 1, 2, 3, 4] : nDoc.type === "Visiting" ? [1, 3] : [2, 4],
+      av: av || "DR"
+    }]);
+    setAddDoc(false);
+    setNDoc({
+      name: "",
+      spec: "Family Medicine",
+      type: "Staff",
+      max: "40"
+    });
+    fl("Doctor added");
+  };
+  const removeDoctor = id => {
+    setDocs(p => p.filter(d => d.id !== id));
+    setShifts(p => p.filter(s => s.did !== id));
+    fl("Doctor and their shifts removed");
+  };
+  const unread = msgs.filter(m => !m.read).length;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'DM Sans',sans-serif",
+      background: "#F3F5F7",
+      minHeight: "100vh",
+      color: "#1a1a2e",
+      display: "flex"
+    }
+  }, /*#__PURE__*/React.createElement("style", null, `
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+.S{width:220px;background:#0B1D26;color:#fff;position:fixed;top:0;left:0;bottom:0;display:flex;flex-direction:column;z-index:100}
+.S .lo{padding:18px;font-family:'Fraunces',serif;font-size:17px;font-weight:600;display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(255,255,255,.08)}
+.S .dt{width:8px;height:8px;background:#2DD4A1;border-radius:50%;box-shadow:0 0 8px rgba(45,212,161,.5)}
+.S nav{padding:10px 8px;flex:1;overflow-y:auto}
+.S .ns{font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,.25);padding:14px 12px 5px;font-weight:600}
+.S .ni{display:flex;align-items:center;gap:9px;padding:9px 13px;border-radius:7px;font-size:12.5px;font-weight:500;cursor:pointer;color:rgba(255,255,255,.5);transition:all .15s;border:none;background:none;width:100%;text-align:left;font-family:inherit}
+.S .ni:hover{background:rgba(255,255,255,.06);color:rgba(255,255,255,.9)}
+.S .ni.a{background:rgba(45,212,161,.15);color:#2DD4A1}
+.bg{background:#EF4444;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:99px;margin-left:auto}
+.M{margin-left:220px;padding:22px 26px;flex:1;min-height:100vh}
+.hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;flex-wrap:wrap;gap:10px}
+.tt{font-family:'Fraunces',serif;font-size:24px;font-weight:600}
+.su{font-size:12px;color:#888;margin-top:2px}
+.bt{display:inline-flex;align-items:center;gap:5px;padding:8px 16px;border-radius:7px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .15s;border:none}
+.bp{background:#2DD4A1;color:#0B1D26}.bp:hover{background:#5EEBC0}
+.bs{background:#fff;color:#1A6B5A;border:1px solid #D4E8E0}.bs:hover{background:#F0FFF8}
+.bd{background:#FEE2E2;color:#DC2626}
+.cd{background:#fff;border-radius:11px;border:1px solid #E5E9ED;padding:18px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.02)}
+.ct{font-family:'Fraunces',serif;font-size:16px;font-weight:600;margin-bottom:10px}
+.ip{width:100%;padding:9px 11px;border-radius:7px;border:1px solid #D4D8DD;font-size:12.5px;font-family:inherit;outline:none;resize:vertical}.ip:focus{border-color:#2DD4A1}
+.sl{width:100%;padding:9px 11px;border-radius:7px;border:1px solid #D4D8DD;font-size:12.5px;font-family:inherit;background:#fff;outline:none;appearance:auto}
+.lb{font-size:10px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;display:block}
+.ig{margin-bottom:12px}
+.tg{display:inline-block;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:500;margin:2px 2px 2px 0}
+.av{width:32px;height:32px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0}
+.ov{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:1000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.ml{background:#fff;border-radius:14px;padding:24px;max-width:460px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.15);max-height:90vh;overflow-y:auto}
+.mtt{font-family:'Fraunces',serif;font-size:18px;font-weight:600;margin-bottom:16px}
+.nf{position:fixed;top:16px;right:16px;padding:10px 20px;border-radius:9px;font-size:12px;font-weight:500;z-index:2000;animation:si .3s;box-shadow:0 6px 20px rgba(0,0,0,.1)}
+.nf.s{background:#1A6B5A;color:#fff}.nf.e{background:#DC2626;color:#fff}
+@keyframes si{from{transform:translateX(60px);opacity:0}to{transform:translateX(0);opacity:1}}
+.ou{background:#F4FFF8;border:1px solid #C8F0DC;border-radius:9px;padding:14px;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.65;white-space:pre-wrap;max-height:450px;overflow-y:auto;color:#1a1a2e}
+.gr{display:grid;grid-template-columns:60px repeat(7,1fr);background:#fff;border-radius:11px;border:1px solid #E5E9ED;overflow:hidden}
+.gh{background:#F8FAFB;padding:8px 4px;text-align:center;font-size:11px;font-weight:600;color:#555;border-bottom:1px solid #E5E9ED}
+.gt{padding:3px 5px;text-align:right;font-size:9px;color:#999;font-family:'JetBrains Mono',monospace;border-right:1px solid #E5E9ED;min-height:40px;display:flex;align-items:flex-start;justify-content:flex-end}
+.gc{border-right:1px solid #F0F2F4;border-bottom:1px solid #F0F2F4;min-height:40px;position:relative;padding:1px}
+.sh{border-radius:4px;padding:2px 4px;font-size:9px;font-weight:500;cursor:pointer;border-left:3px solid;line-height:1.2;position:absolute;left:1px;right:1px;overflow:hidden;z-index:5;transition:all .1s}
+.sh:hover{transform:scale(1.03);box-shadow:0 2px 6px rgba(0,0,0,.1);z-index:10}
+.ac{background:linear-gradient(135deg,#F0FFF8,#E8F5FF);border:1px solid #C8E8DC;border-radius:9px;padding:12px;margin-bottom:9px}
+.pr{display:inline-block;padding:2px 6px;border-radius:4px;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+.pu{animation:pu 2s infinite}@keyframes pu{0%,100%{opacity:1}50%{opacity:.4}}
+.mr{display:flex;align-items:flex-start;gap:10px;padding:10px;border-radius:7px;cursor:pointer;transition:background .15s;border-bottom:1px solid #F0F2F4}.mr:hover{background:#F8FAFB}.mr.u{background:#F0FFF8}
+.pg{height:5px;background:#E5E9ED;border-radius:99px;overflow:hidden}.pgb{height:100%;border-radius:99px;transition:width .5s}
+@media(max-width:768px){.S{width:52px}.S .lo span,.S .ns,.S .ni span,.S .bg{display:none}.S .ni{justify-content:center;padding:10px}.M{margin-left:52px;padding:14px}}
+`), notif && /*#__PURE__*/React.createElement("div", {
+    className: `nf ${notif.t === "success" ? "s" : "e"}`
+  }, notif.m), /*#__PURE__*/React.createElement("div", {
+    className: "S"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lo"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dt"
+  }), /*#__PURE__*/React.createElement("span", null, "DoctorDash")), /*#__PURE__*/React.createElement("nav", null, /*#__PURE__*/React.createElement("div", {
+    className: "ns"
+  }, /*#__PURE__*/React.createElement("span", null, "Clinical")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "dash" ? "a" : ""}`,
+    onClick: () => setV("dash")
+  }, Ic.home, /*#__PURE__*/React.createElement("span", null, "Dashboard")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "pts" ? "a" : ""}`,
+    onClick: () => setV("pts")
+  }, Ic.users, /*#__PURE__*/React.createElement("span", null, "Patients")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "soap" ? "a" : ""}`,
+    onClick: () => setV("soap")
+  }, Ic.file, /*#__PURE__*/React.createElement("span", null, "SOAP Notes")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "inbox" ? "a" : ""}`,
+    onClick: () => setV("inbox")
+  }, Ic.mail, /*#__PURE__*/React.createElement("span", null, "Inbox"), unread > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "bg"
+  }, unread)), /*#__PURE__*/React.createElement("div", {
+    className: "ns"
+  }, /*#__PURE__*/React.createElement("span", null, "Scheduling")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "team" ? "a" : ""}`,
+    onClick: () => setV("team")
+  }, Ic.users, /*#__PURE__*/React.createElement("span", null, "Team")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "roster" ? "a" : ""}`,
+    onClick: () => setV("roster")
+  }, Ic.cal, /*#__PURE__*/React.createElement("span", null, "Roster")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "rai" ? "a" : ""}`,
+    onClick: () => setV("rai")
+  }, Ic.brain, /*#__PURE__*/React.createElement("span", null, "AI Optimizer")), /*#__PURE__*/React.createElement("div", {
+    className: "ns"
+  }, /*#__PURE__*/React.createElement("span", null, "System")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "settings" ? "a" : ""}`,
+    onClick: () => setV("settings")
+  }, Ic.key, /*#__PURE__*/React.createElement("span", null, "AI Settings"), !apiKey && /*#__PURE__*/React.createElement("span", {
+    className: "bg"
+  }, "!"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 10,
+      borderTop: "1px solid rgba(255,255,255,.06)",
+      fontSize: 9,
+      color: "rgba(255,255,255,.3)",
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("span", null, aiMode === "live" ? "🟢 Live AI" : "🔵 Smart Engine"))), /*#__PURE__*/React.createElement("div", {
+    className: "M"
+  }, v === "dash" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Good morning, Doctor"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "Friday, March 20, 2026 \xB7 ", pts.length, " patients today")), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: genPrep,
+    disabled: prepL
+  }, prepL ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "pu"
+  }, "\u26A1"), " Generating...") : /*#__PURE__*/React.createElement(React.Fragment, null, Ic.spark, " Morning Brief"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))",
+      gap: 10,
+      marginBottom: 18
+    }
+  }, [{
+    n: pts.length,
+    l: "Patients",
+    c: "#1A6B5A"
+  }, {
+    n: unread,
+    l: "Unread",
+    c: "#2196F3"
+  }, {
+    n: pts.reduce((a, p) => a + p.labs.length, 0),
+    l: "Pending Labs",
+    c: "#FF9800"
+  }, {
+    n: shifts.filter(s => s.day === 4).length,
+    l: "Shifts Today",
+    c: "#9C27B0"
+  }].map((s, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "cd",
+    style: {
+      textAlign: "center",
+      padding: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 26,
+      fontFamily: "'Fraunces',serif",
+      fontWeight: 700,
+      color: s.c
+    }
+  }, s.n), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#888"
+    }
+  }, s.l)))), !apiKey && /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      background: "#FFFBEB",
+      borderColor: "#FDE68A",
+      cursor: "pointer"
+    },
+    onClick: () => setV("settings")
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      fontSize: 12,
+      color: "#92400E"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 16
+    }
+  }, "\uD83D\uDCA1"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", null, "Smart Engine active"), " \u2014 tap here to add your Claude API key for live AI-powered notes and replies"))), prepL && /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      textAlign: "center",
+      padding: 28
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "pu",
+    style: {
+      fontSize: 28
+    }
+  }, "\uD83E\uDDE0"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#888",
+      fontSize: 12,
+      marginTop: 6
+    }
+  }, "Analyzing patient records...")), prep && /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "\u2600 Morning Prep Brief"), /*#__PURE__*/React.createElement("div", {
+    className: "ou"
+  }, prep)), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "Today's Patients"), pts.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    key: p.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      padding: "8px 0",
+      borderBottom: "1px solid #F0F2F4",
+      cursor: "pointer"
+    },
+    onClick: () => {
+      setSelPt(p);
+      setV("soap");
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "av",
+    style: {
+      background: C[i % 8].d
+    }
+  }, p.name.split(" ").map(w => w[0]).join("")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12.5
+    }
+  }, p.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: "#888"
+    }
+  }, p.age, p.sex, " \xB7 ", p.conds.join(", "))), p.labs.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "tg",
+    style: {
+      background: "#FFF3E0",
+      color: "#E65100"
+    }
+  }, p.labs.length, " pending"))))), v === "pts" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Patients"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, pts.length, " on file")), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => setAddPt(true)
+  }, Ic.plus, " Add Patient")), pts.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    key: p.id,
+    className: "cd",
+    style: {
+      cursor: "pointer"
+    },
+    onClick: () => {
+      setSelPt(p);
+      setV("soap");
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "av",
+    style: {
+      background: C[i % 8].d,
+      width: 40,
+      height: 40,
+      fontSize: 13
+    }
+  }, p.name.split(" ").map(w => w[0]).join("")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 14
+    }
+  }, p.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#888"
+    }
+  }, p.age, p.sex, " \xB7 Allergies: ", p.allg.join(", ") || "NKDA"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, p.conds.map(c => /*#__PURE__*/React.createElement("span", {
+    key: c,
+    className: "tg",
+    style: {
+      background: "#E8F5E9",
+      color: "#2E7D32"
+    }
+  }, c))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4
+    }
+  }, p.meds.map(m => /*#__PURE__*/React.createElement("span", {
+    key: m,
+    className: "tg",
+    style: {
+      background: "#E3F2FD",
+      color: "#1565C0"
+    }
+  }, m)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#888"
+    }
+  }, p.visits.length, " visits"))))), v === "soap" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "SOAP Note Drafter"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "Type notes, dictate, or record a conversation"))), /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      background: isRec ? "#FFF5F5" : recStatus === "processing" ? "#FFFBEB" : "#F0FFF8",
+      borderColor: isRec ? "#FCA5A5" : recStatus === "processing" ? "#FDE68A" : "#A7F3D0"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, Ic.mic, " Voice Recording"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      marginBottom: 12
+    }
+  }, !isRec && recStatus !== "" ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pu",
+    style: {
+      fontSize: 16
+    }
+  }, "\u23F3"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: "#92400E",
+      fontWeight: 500
+    }
+  }, "Processing transcript...")) : !isRec ? /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      background: "#DC2626",
+      color: "#fff",
+      padding: "10px 20px",
+      borderRadius: 20
+    },
+    onClick: startRecording
+  }, Ic.mic, " Start Recording") : /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      background: "#1a1a2e",
+      color: "#fff",
+      padding: "10px 20px",
+      borderRadius: 20
+    },
+    onClick: stopRecording
+  }, Ic.stop, " Stop (", formatTime(recTime), ")"), isRec && /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      fontSize: 12,
+      color: "#DC2626",
+      fontWeight: 600
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pu",
+    style: {
+      width: 8,
+      height: 8,
+      background: "#DC2626",
+      borderRadius: "50%",
+      display: "inline-block"
+    }
+  }), " RECORDING"), transcript && !isRec && recStatus === "" && /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    style: {
+      fontSize: 10,
+      padding: "5px 12px"
+    },
+    onClick: clearRecording
+  }, "Clear")), transcript && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#fff",
+      border: "1px solid #E5E9ED",
+      borderRadius: 8,
+      padding: 12,
+      maxHeight: 150,
+      overflowY: "auto",
+      fontSize: 11.5,
+      color: "#333",
+      lineHeight: 1.6,
+      fontFamily: "'JetBrains Mono',monospace"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 9,
+      color: "#888",
+      textTransform: "uppercase",
+      letterSpacing: 1,
+      fontWeight: 600,
+      marginBottom: 6
+    }
+  }, "Live Transcript"), transcript), !transcript && !isRec && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#888",
+      lineHeight: 1.5
+    }
+  }, "Tap ", /*#__PURE__*/React.createElement("strong", null, "Start Recording"), " to capture a doctor-patient conversation. The AI will automatically extract vitals, symptoms, diagnoses, medications, and plan items from the conversation and prepare them for SOAP note generation.")), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Patient"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: selPt?.id || "",
+    onChange: e => setSelPt(pts.find(p => p.id === e.target.value) || null)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "-- Select patient --"), pts.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p.id,
+    value: p.id
+  }, p.name, " (", p.age, p.sex, ")")))), selPt && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#F8FAFB",
+      borderRadius: 7,
+      padding: 10,
+      marginBottom: 12,
+      fontSize: 11.5,
+      color: "#555"
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Context:"), " ", selPt.conds.join(", "), " \xB7 Meds: ", selPt.meds.join(", "), " \xB7 Allergies: ", selPt.allg.join(", ") || "NKDA"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Clinical Notes ", soapIn.includes("From Recording") ? "(includes recording data)" : ""), /*#__PURE__*/React.createElement("textarea", {
+    className: "ip",
+    rows: 5,
+    placeholder: "Type quick notes here, or use voice recording above. Example: 45M f/u HTN. BP 138/86. Taking lisinopril 20. Lost 4 lbs. No HA, no CP. Continue current plan, recheck 6 weeks.",
+    value: soapIn,
+    onChange: e => setSoapIn(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: genSoap,
+    disabled: soapL || !soapIn.trim()
+  }, soapL ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "pu"
+  }, "\u26A1"), " Generating...") : /*#__PURE__*/React.createElement(React.Fragment, null, Ic.spark, " Generate SOAP Note")), soapIn && /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => {
+      setSoapIn("");
+      setSoapOut("");
+      setTranscript("");
+    }
+  }, "Clear All"))), soapOut && /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "Generated SOAP Note"), /*#__PURE__*/React.createElement("div", {
+    className: "ou"
+  }, soapOut), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => fl("Note saved to patient record")
+  }, Ic.chk, " Save to Record"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => {
+      navigator.clipboard?.writeText(soapOut);
+      fl("Copied to clipboard");
+    }
+  }, "Copy")))), v === "inbox" && !selMsg && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Inbox"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, unread, " unread messages"))), msgs.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    className: `mr ${!m.read ? "u" : ""}`,
+    onClick: () => {
+      setSelMsg(m);
+      setDraft("");
+      setMsgs(p => p.map(x => x.id === m.id ? {
+        ...x,
+        read: true
+      } : x));
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "av",
+    style: {
+      background: !m.read ? "#1A6B5A" : "#999"
+    }
+  }, m.from.split(" ").map(w => w[0]).join("")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: !m.read ? 700 : 500,
+      fontSize: 13
+    }
+  }, m.from), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#888"
+    }
+  }, m.time)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: !m.read ? 600 : 400,
+      marginTop: 2
+    }
+  }, m.subj), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#888",
+      marginTop: 3
+    }
+  }, m.body.slice(0, 100), "..."))))), v === "inbox" && selMsg && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, selMsg.subj), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "From: ", selMsg.from, " \xB7 ", selMsg.time)), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setSelMsg(null)
+  }, "\u2190 Back")), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      lineHeight: 1.7
+    }
+  }, selMsg.body)), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct",
+    style: {
+      marginBottom: 0
+    }
+  }, "AI Draft Reply"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: genReply,
+    disabled: draftL
+  }, draftL ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "pu"
+  }, "\u26A1"), " Drafting...") : /*#__PURE__*/React.createElement(React.Fragment, null, Ic.spark, " Generate Reply"))), draft ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "ou"
+  }, draft), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => fl("Reply sent")
+  }, Ic.send, " Send"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => {
+      navigator.clipboard?.writeText(draft);
+      fl("Copied");
+    }
+  }, "Copy"))) : !draftL && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#888",
+      fontSize: 12,
+      padding: 16,
+      textAlign: "center"
+    }
+  }, "Click \"Generate Reply\" to draft a response"))), v === "team" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Team"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, docs.length, " providers at this location")), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => setAddDoc(true)
+  }, Ic.plus, " Add Doctor")), docs.map(d => {
+    const h = shifts.filter(s => s.did === d.id).reduce((a, s) => a + (s.e - s.s), 0);
+    const pct = Math.round(h / d.max * 100);
+    return /*#__PURE__*/React.createElement("div", {
+      key: d.id,
+      className: "cd"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 12,
+        alignItems: "flex-start"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "av",
+      style: {
+        background: C[d.ci].d,
+        width: 42,
+        height: 42,
+        fontSize: 14
+      }
+    }, d.av), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 600,
+        fontSize: 14
+      }
+    }, d.name), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: "#888",
+        marginTop: 2
+      }
+    }, d.spec), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 8,
+        flexWrap: "wrap"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "tg",
+      style: {
+        background: d.type === "Staff" ? "#E8F5E9" : d.type === "Visiting" ? "#E3F2FD" : d.type === "Locum" ? "#FFF3E0" : "#F3E5F5",
+        color: d.type === "Staff" ? "#2E7D32" : d.type === "Visiting" ? "#1565C0" : d.type === "Locum" ? "#E65100" : "#6A1B9A"
+      }
+    }, d.type), /*#__PURE__*/React.createElement("span", {
+      className: "tg",
+      style: {
+        background: "#F5F5F5",
+        color: "#555"
+      }
+    }, h, "h / ", d.max, "h week"), /*#__PURE__*/React.createElement("span", {
+      className: "tg",
+      style: {
+        background: "#F5F5F5",
+        color: "#555"
+      }
+    }, "Prefers: ", d.pref.map(i => DAYS[i]).join(", "))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 10,
+        color: "#888",
+        marginBottom: 3
+      }
+    }, /*#__PURE__*/React.createElement("span", null, "Weekly capacity"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: pct > 90 ? "#DC2626" : pct > 70 ? "#E65100" : "#2E7D32"
+      }
+    }, pct, "%")), /*#__PURE__*/React.createElement("div", {
+      className: "pg"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "pgb",
+      style: {
+        width: `${Math.min(pct, 100)}%`,
+        background: pct > 90 ? "#DC2626" : pct > 70 ? "#FF9800" : "#2DD4A1"
+      }
+    })))), /*#__PURE__*/React.createElement("button", {
+      className: "bt bd",
+      style: {
+        padding: "5px 10px",
+        fontSize: 10
+      },
+      onClick: () => {
+        if (confirm(`Remove ${d.name} and all their shifts?`)) removeDoctor(d.id);
+      }
+    }, "Remove")));
+  })), v === "roster" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Weekly Roster"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, docs.length, " providers \xB7 ", shifts.length, " shifts")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setAddDoc(true)
+  }, Ic.plus, " Add Doctor"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => setAddSh(true)
+  }, Ic.plus, " Add Shift"))), /*#__PURE__*/React.createElement("div", {
+    className: "gr"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "gh"
+  }), DAYS.map((d, i) => /*#__PURE__*/React.createElement("div", {
+    key: d,
+    className: "gh",
+    style: i === 4 ? {
+      background: "#E8F8F2",
+      color: "#1A6B5A"
+    } : {}
+  }, d)), HRS.map(h => /*#__PURE__*/React.createElement(Fragment, {
+    key: h
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "gt"
+  }, h, ":00"), DAYS.map((_, di) => {
+    const cs = shifts.filter(s => s.day === di && s.s === h);
+    return /*#__PURE__*/React.createElement("div", {
+      key: `${h}-${di}`,
+      className: "gc",
+      style: di === 4 ? {
+        background: "#FBFFFE"
+      } : {}
+    }, cs.map(s => {
+      const doc = docs.find(d => d.id === s.did);
+      const c = C[doc?.ci || 0];
+      return /*#__PURE__*/React.createElement("div", {
+        key: s.id,
+        className: "sh",
+        style: {
+          background: c.b,
+          borderLeftColor: c.r,
+          color: c.t,
+          height: (s.e - s.s) * 40 - 3
+        },
+        onClick: () => {
+          if (confirm(`Remove ${doc?.name}'s shift?`)) {
+            setShifts(p => p.filter(x => x.id !== s.id));
+            fl("Shift removed");
+          }
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 600,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis"
+        }
+      }, doc?.name?.split(" ").pop()), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 8,
+          opacity: .7
+        }
+      }, s.s, "\u2013", s.e));
+    }));
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 10,
+      marginTop: 14
+    }
+  }, docs.map(d => /*#__PURE__*/React.createElement("div", {
+    key: d.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 5,
+      fontSize: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 9,
+      height: 9,
+      borderRadius: 3,
+      background: C[d.ci].d
+    }
+  }), d.name, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#888"
+    }
+  }, "(", d.type, ")"))))), v === "rai" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "AI Schedule Optimizer"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "Roster analysis & recommendations")), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: genRosterAI,
+    disabled: aiL
+  }, aiL ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "pu"
+  }, "\uD83E\uDDE0"), " Analyzing...") : /*#__PURE__*/React.createElement(React.Fragment, null, Ic.brain, " Run Analysis"))), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "Provider Capacity"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))",
+      gap: 10
+    }
+  }, docs.map(d => {
+    const h = shifts.filter(s => s.did === d.id).reduce((a, s) => a + (s.e - s.s), 0);
+    const p = Math.round(h / d.max * 100);
+    return /*#__PURE__*/React.createElement("div", {
+      key: d.id,
+      style: {
+        background: "#F8FAFB",
+        borderRadius: 7,
+        padding: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 7,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "av",
+      style: {
+        background: C[d.ci].d,
+        width: 26,
+        height: 26,
+        fontSize: 9
+      }
+    }, d.av), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 600,
+        fontSize: 11.5
+      }
+    }, d.name), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: "#888"
+      }
+    }, d.type, " \xB7 ", d.spec))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 10,
+        color: "#888",
+        marginBottom: 3
+      }
+    }, /*#__PURE__*/React.createElement("span", null, h, "h / ", d.max, "h"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: p > 90 ? "#DC2626" : "#2E7D32"
+      }
+    }, p, "%")), /*#__PURE__*/React.createElement("div", {
+      className: "pg"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "pgb",
+      style: {
+        width: `${Math.min(p, 100)}%`,
+        background: p > 90 ? "#DC2626" : "#2DD4A1"
+      }
+    })));
+  }))), aiL && /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      textAlign: "center",
+      padding: 28
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "pu",
+    style: {
+      fontSize: 32
+    }
+  }, "\uD83E\uDDE0"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#888",
+      fontSize: 12,
+      marginTop: 6
+    }
+  }, "Analyzing coverage patterns...")), aiRes.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "ac"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pr",
+    style: {
+      background: r.priority === "high" ? "#FEE2E2" : r.priority === "medium" ? "#FFF3E0" : "#E3F2FD",
+      color: r.priority === "high" ? "#DC2626" : r.priority === "medium" ? "#E65100" : "#1565C0"
+    }
+  }, r.priority), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12.5,
+      marginBottom: 3
+    }
+  }, r.title), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#555",
+      lineHeight: 1.5
+    }
+  }, r.detail), r.fix && /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      marginTop: 8,
+      fontSize: 10,
+      padding: "6px 14px"
+    },
+    onClick: () => {
+      setShifts(p => [...p, {
+        id: nid.current++,
+        ...r.fix
+      }]);
+      setAiRes(p => p.filter((_, j) => j !== i));
+      fl(r.fix.label || "Fix applied — shift added");
+    }
+  }, Ic.chk, " ", r.fix.label || "Apply Fix"))), !aiL && !aiRes.length && /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      textAlign: "center",
+      padding: 36
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 32
+    }
+  }, "\uD83E\uDD16"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'Fraunces',serif",
+      fontSize: 16,
+      fontWeight: 600,
+      marginTop: 6
+    }
+  }, "Ready to optimize"))), v === "settings" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "AI Settings"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "Connect your Claude API key for live AI-powered features"))), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, Ic.key, " Claude API Key"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12.5,
+      color: "#666",
+      lineHeight: 1.6,
+      marginBottom: 14
+    }
+  }, "With an API key, DoctorDash uses real Claude AI to generate SOAP notes, inbox replies, and morning briefs. Without a key, the smart local engine handles everything."), apiKey ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#E8F5E9",
+      border: "1px solid #A5D6A7",
+      borderRadius: 8,
+      padding: 12,
+      marginBottom: 14,
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#2E7D32",
+      fontWeight: 700,
+      fontSize: 18
+    }
+  }, "\u2713"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12.5,
+      color: "#2E7D32"
+    }
+  }, "Live AI Active"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#4CAF50",
+      fontFamily: "'JetBrains Mono',monospace"
+    }
+  }, apiKey.slice(0, 12), "...", apiKey.slice(-4))), /*#__PURE__*/React.createElement("button", {
+    className: "bt bd",
+    style: {
+      marginLeft: "auto",
+      padding: "5px 10px",
+      fontSize: 10
+    },
+    onClick: () => {
+      clearApiKey();
+      setAiMode("local");
+      fl("Key removed — using smart engine", "error");
+    }
+  }, "Remove")) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#FFF3E0",
+      border: "1px solid #FFE0B2",
+      borderRadius: 8,
+      padding: 12,
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12.5,
+      color: "#E65100"
+    }
+  }, "\uD83D\uDD35 Using Smart Local Engine"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#F57C00",
+      marginTop: 3
+    }
+  }, "Add an API key below to upgrade to live Claude AI")), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "API Key"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "text",
+    placeholder: "sk-ant-api03-...",
+    value: apiKeyInput,
+    onChange: e => setApiKeyInput(e.target.value),
+    style: {
+      fontFamily: "'JetBrains Mono',monospace",
+      fontSize: 11.5
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => {
+      const k = apiKeyInput.trim();
+      if (!k || !k.startsWith("sk-ant")) {
+        fl("Enter a valid key starting with sk-ant", "error");
+        return;
+      }
+      saveApiKey(k);
+      setAiMode("live");
+      fl("API key saved permanently!");
+    }
+  }, "Save Key"), apiKey && /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: async () => {
+      fl("Testing connection...");
+      try {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true"
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 100,
+            messages: [{
+              role: "user",
+              content: "Reply with exactly: Connection successful!"
+            }]
+          })
+        });
+        const data = await res.json();
+        if (data.error) {
+          fl("API Error: " + data.error.message, "error");
+        } else if (data.content && data.content[0]) {
+          setAiMode("live");
+          fl("✓ Live AI connected! Response: " + data.content[0].text.slice(0, 50));
+        } else {
+          fl("Unexpected response format", "error");
+        }
+      } catch (e) {
+        fl("Network error: " + e.message, "error");
+      }
+    }
+  }, "Test Connection")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 16,
+      padding: 14,
+      background: "#F8FAFB",
+      borderRadius: 8,
+      fontSize: 11.5,
+      color: "#666",
+      lineHeight: 1.6
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "How to get a key:"), /*#__PURE__*/React.createElement("br", null), "1. Go to ", /*#__PURE__*/React.createElement("strong", null, "console.anthropic.com"), /*#__PURE__*/React.createElement("br", null), "2. Sign up or sign in", /*#__PURE__*/React.createElement("br", null), "3. Go to API Keys \u2192 Create Key", /*#__PURE__*/React.createElement("br", null), "4. Paste it above", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("strong", null, "Cost:"), " ~$0.003\u20130.015 per note generation. Typical daily use costs less than $0.50.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("strong", null, "Privacy:"), " Your key is stored in browser memory only. It is never sent anywhere except directly to Anthropic's API. When you close the tab, the key is gone.")), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "How AI Works"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#555",
+      lineHeight: 1.7
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "flex-start",
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 18
+    }
+  }, "\uD83D\uDFE2"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", null, "Live AI Mode"), " (with API key)", /*#__PURE__*/React.createElement("br", null), "SOAP notes, inbox replies, and morning briefs are generated by Claude \u2014 Anthropic's AI model. Each request sends the clinical context to Claude and receives a unique, contextually-aware response. This is true generative AI.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "flex-start"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 18
+    }
+  }, "\uD83D\uDD35"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", null, "Smart Engine Mode"), " (without API key)", /*#__PURE__*/React.createElement("br", null), "All features work using a built-in clinical rules engine. It parses your notes for vitals, conditions, medications, and generates structured output using medical templates. Reliable and instant, but not generative.")))))), addPt && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => setAddPt(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "Add Patient"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Full Name"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nPt.name,
+    onChange: e => setNPt(p => ({
+      ...p,
+      name: e.target.value
+    })),
+    placeholder: "John Smith"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Age"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "number",
+    value: nPt.age,
+    onChange: e => setNPt(p => ({
+      ...p,
+      age: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Sex"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nPt.sex,
+    onChange: e => setNPt(p => ({
+      ...p,
+      sex: e.target.value
+    }))
+  }, /*#__PURE__*/React.createElement("option", null, "M"), /*#__PURE__*/React.createElement("option", null, "F")))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Conditions (comma sep)"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nPt.conds,
+    onChange: e => setNPt(p => ({
+      ...p,
+      conds: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Medications (comma sep)"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nPt.meds,
+    onChange: e => setNPt(p => ({
+      ...p,
+      meds: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Allergies (comma sep)"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nPt.allg,
+    onChange: e => setNPt(p => ({
+      ...p,
+      allg: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      flex: 1
+    },
+    onClick: addPatient,
+    disabled: !nPt.name
+  }, "Add Patient"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setAddPt(false)
+  }, "Cancel")))), addSh && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => setAddSh(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "Add Shift"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Provider"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.did,
+    onChange: e => setNSh(p => ({
+      ...p,
+      did: +e.target.value
+    }))
+  }, docs.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name, " (", d.type, ")")))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Day"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.day,
+    onChange: e => setNSh(p => ({
+      ...p,
+      day: +e.target.value
+    }))
+  }, DAYS.map((d, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, d)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Start"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.s,
+    onChange: e => setNSh(p => ({
+      ...p,
+      s: +e.target.value
+    }))
+  }, HRS.map(h => /*#__PURE__*/React.createElement("option", {
+    key: h,
+    value: h
+  }, h, ":00")))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "End"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.e,
+    onChange: e => setNSh(p => ({
+      ...p,
+      e: +e.target.value
+    }))
+  }, HRS.filter(h => h > nSh.s).map(h => /*#__PURE__*/React.createElement("option", {
+    key: h,
+    value: h
+  }, h, ":00"))))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Room"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.rm,
+    onChange: e => setNSh(p => ({
+      ...p,
+      rm: e.target.value
+    }))
+  }, RMS.map(r => /*#__PURE__*/React.createElement("option", {
+    key: r
+  }, r)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      flex: 1
+    },
+    onClick: addShift
+  }, "Add Shift"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setAddSh(false)
+  }, "Cancel")))), addDoc && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => setAddDoc(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "Add Doctor"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Full Name"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nDoc.name,
+    onChange: e => setNDoc(p => ({
+      ...p,
+      name: e.target.value
+    })),
+    placeholder: "Dr. Jane Smith"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Specialty"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nDoc.spec,
+    onChange: e => setNDoc(p => ({
+      ...p,
+      spec: e.target.value
+    }))
+  }, ["Family Medicine", "Internal Medicine", "Pediatrics", "Cardiology", "Orthopedics", "Dermatology", "OB/GYN", "Psychiatry", "Neurology", "Gastroenterology", "Pulmonology", "Endocrinology", "Ophthalmology", "ENT", "Urology", "General Surgery", "Emergency Medicine", "Radiology", "Anesthesiology", "Other"].map(s => /*#__PURE__*/React.createElement("option", {
+    key: s
+  }, s)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Type"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nDoc.type,
+    onChange: e => setNDoc(p => ({
+      ...p,
+      type: e.target.value
+    }))
+  }, /*#__PURE__*/React.createElement("option", null, "Staff"), /*#__PURE__*/React.createElement("option", null, "Visiting"), /*#__PURE__*/React.createElement("option", null, "Locum"), /*#__PURE__*/React.createElement("option", null, "Consultant"))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Max Hours/Week"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "number",
+    value: nDoc.max,
+    onChange: e => setNDoc(p => ({
+      ...p,
+      max: e.target.value
+    }))
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      flex: 1
+    },
+    onClick: addDoctor,
+    disabled: !nDoc.name.trim()
+  }, "Add Doctor"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setAddDoc(false)
+  }, "Cancel")))));
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
