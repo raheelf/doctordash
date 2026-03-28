@@ -1,0 +1,4919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DoctorDash — AI Workflow Assistant</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🩺</text></svg>">
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<style>body{margin:0;padding:0;background:#F9FAFB;}</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+var DOCTORDASH_API_KEY = "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";
+const {
+  useState,
+  useRef,
+  Fragment
+} = React;
+
+// ─── SMART CLINICAL ENGINE (no API needed — works everywhere) ───────────────
+function generateSOAPNote(quickNotes, patient) {
+  const n = quickNotes.toLowerCase();
+  // Extract vitals
+  const bpMatch = quickNotes.match(/BP\s*(\d+\/\d+)/i);
+  const bp = bpMatch ? bpMatch[1] : null;
+  const hrMatch = quickNotes.match(/HR\s*(\d+)/i);
+  const hr = hrMatch ? hrMatch[1] : null;
+  const wtMatch = quickNotes.match(/(?:wt|weight)\s*(\d+)/i);
+  const wt = wtMatch ? wtMatch[1] : null;
+  const tempMatch = quickNotes.match(/(?:temp|temperature)\s*([\d.]+)/i);
+  const temp = tempMatch ? tempMatch[1] : null;
+  const o2Match = quickNotes.match(/O2\s*(?:sat)?\s*(\d+)/i);
+  const o2 = o2Match ? o2Match[1] : null;
+
+  // Extract age/sex
+  const ageMatch = quickNotes.match(/(\d+)\s*(M|F|yo|y\/o)/i);
+  const age = ageMatch ? ageMatch[1] : patient?.age || "";
+  const sex = ageMatch ? ageMatch[2].toUpperCase() === "M" ? "male" : "female" : patient?.sex === "M" ? "male" : "female";
+
+  // Determine conditions mentioned
+  const conditions = [];
+  const icd = [];
+  if (n.includes("htn") || n.includes("hypertension") || n.includes("blood pressure") || n.includes("bp")) {
+    conditions.push("Essential Hypertension");
+    icd.push("I10");
+  }
+  if (n.includes("dm") || n.includes("diabet") || n.includes("a1c") || n.includes("glucose") || n.includes("metformin")) {
+    conditions.push("Type 2 Diabetes Mellitus");
+    icd.push("E11.9");
+  }
+  if (n.includes("anxiety") || n.includes("gad") || n.includes("anxious")) {
+    conditions.push("Generalized Anxiety Disorder");
+    icd.push("F41.1");
+  }
+  if (n.includes("gerd") || n.includes("reflux") || n.includes("heartburn")) {
+    conditions.push("GERD");
+    icd.push("K21.0");
+  }
+  if (n.includes("asthma") || n.includes("wheez") || n.includes("inhaler")) {
+    conditions.push("Asthma");
+    icd.push("J45.40");
+  }
+  if (n.includes("cholesterol") || n.includes("lipid") || n.includes("statin") || n.includes("hyperlipid")) {
+    conditions.push("Hyperlipidemia");
+    icd.push("E78.5");
+  }
+  if (n.includes("arthri") || n.includes("joint") || n.includes("knee") || n.includes("osteo")) {
+    conditions.push("Osteoarthritis");
+    icd.push("M17.9");
+  }
+  if (n.includes("depress") || n.includes("ssri") || n.includes("sertraline")) {
+    conditions.push("Major Depressive Disorder");
+    icd.push("F32.1");
+  }
+  if (n.includes("edema") || n.includes("swell")) {
+    conditions.push("Peripheral Edema");
+    icd.push("R60.0");
+  }
+  if (n.includes("allerg")) {
+    conditions.push("Allergic Rhinitis");
+    icd.push("J30.9");
+  }
+
+  // Add patient conditions if not already captured
+  if (patient && conditions.length === 0) {
+    patient.conds.forEach(c => {
+      if (c.includes("Diabet")) {
+        conditions.push(c);
+        icd.push("E11.9");
+      } else if (c.includes("Hypert")) {
+        conditions.push(c);
+        icd.push("I10");
+      } else if (c.includes("Anxiety")) {
+        conditions.push(c);
+        icd.push("F41.1");
+      } else if (c.includes("Asthma")) {
+        conditions.push(c);
+        icd.push("J45.40");
+      } else {
+        conditions.push(c);
+        icd.push("—");
+      }
+    });
+  }
+  if (conditions.length === 0) {
+    conditions.push("See clinical notes");
+    icd.push("Z00.00");
+  }
+
+  // Determine trend
+  const improving = n.includes("improv") || n.includes("better") || n.includes("stable") || n.includes("well controlled") || n.includes("lost") || n.includes("down");
+  const worsening = n.includes("worse") || n.includes("increas") || n.includes("elevated") || n.includes("not controlled");
+  const status = improving ? "improving with current management" : worsening ? "suboptimally controlled, requires adjustment" : "stable on current regimen";
+
+  // Build SOAP
+  let subjective = `${age}-year-old ${sex} presents for ${n.includes("f/u") || n.includes("follow") ? "follow-up" : "evaluation"} of ${conditions.slice(0, 2).join(" and ")}.`;
+  subjective += `\nPatient reports: ${quickNotes.replace(/^\d+\s*(M|F)\s*/i, "").trim()}.`;
+  if (improving) subjective += "\nOverall trending in positive direction.";
+  if (n.includes("no") && (n.includes("chest pain") || n.includes("cp"))) subjective += "\nDenies chest pain.";
+  if (n.includes("no") && (n.includes("headache") || n.includes("ha"))) subjective += "\nDenies headaches.";
+  if (n.includes("no") && n.includes("sob")) subjective += "\nDenies shortness of breath.";
+  let objective = "VITALS:";
+  if (bp) objective += `\n  BP: ${bp} mmHg`;
+  if (hr) objective += `\n  HR: ${hr} bpm`;
+  if (wt) objective += `\n  Weight: ${wt} lbs`;
+  if (temp) objective += `\n  Temp: ${temp}°F`;
+  if (o2) objective += `\n  O2 Sat: ${o2}%`;
+  if (!bp && !hr && !wt) objective += "\n  See nursing intake";
+  objective += "\n\nGENERAL: Patient appears well, in no acute distress.";
+  let assessment = conditions.map((c, i) => `${i + 1}. ${c} (${icd[i]}) — ${status}`).join("\n");
+  let plan = "";
+  conditions.forEach((c, i) => {
+    plan += `${i + 1}. ${c}:\n`;
+    if (c.includes("Hypert")) {
+      plan += n.includes("increase") || n.includes("adjust") ? "   - Adjust antihypertensive medication as discussed\n   - Continue lifestyle modifications\n   - Recheck BP in 4-6 weeks\n" : "   - Continue current antihypertensive regimen\n   - Reinforce dietary sodium restriction\n   - Recheck BP at next visit\n";
+    } else if (c.includes("Diabet")) {
+      plan += "   - Continue current glycemic management\n   - Order HbA1c if overdue\n   - Reinforce dietary counseling\n   - Annual eye exam referral if not done\n";
+    } else if (c.includes("Anxiety") || c.includes("Depress")) {
+      plan += "   - Continue current SSRI regimen\n   - Discuss stress management techniques\n   - Follow-up in 3 months\n";
+    } else if (c.includes("Asthma")) {
+      plan += "   - Review inhaler technique\n   - Consider step-up therapy if symptoms persist\n   - Spirometry as scheduled\n";
+    } else if (c.includes("Edema")) {
+      plan += "   - Monitor, consider medication change if worsening\n   - Leg elevation and compression stockings\n   - Recheck in 2-4 weeks\n";
+    } else {
+      plan += "   - Continue current management\n   - Follow-up as needed\n";
+    }
+  });
+  plan += `\nFollow-up: ${n.includes("6 week") ? "6 weeks" : n.includes("3 month") ? "3 months" : n.includes("4 week") ? "4 weeks" : "as scheduled"}`;
+  return `SUBJECTIVE:\n${subjective}\n\nOBJECTIVE:\n${objective}\n\nASSESSMENT:\n${assessment}\n\nPLAN:\n${plan}`;
+}
+function generatePrepBrief(patients) {
+  return patients.map(p => {
+    const lastVisit = p.visits.at(-1);
+    const urgent = p.labs.length > 0;
+    let brief = `■ ${p.name} (${p.age}${p.sex})`;
+    brief += `\n  Conditions: ${p.conds.join(", ")}`;
+    brief += `\n  Current Meds: ${p.meds.join(", ")}`;
+    if (urgent) brief += `\n  ⚠ PENDING: ${p.labs.join(", ")}`;
+    if (lastVisit) {
+      const daysSince = Math.floor((new Date() - new Date(lastVisit.date)) / 86400000);
+      brief += `\n  Last seen: ${lastVisit.date} (${daysSince} days ago)`;
+      // Extract key action items from last SOAP
+      const soap = lastVisit.soap.toLowerCase();
+      if (soap.includes("recheck") || soap.includes("follow")) brief += "\n  → Due for recheck per previous plan";
+      if (soap.includes("adjust") || soap.includes("increase") || soap.includes("consider")) brief += "\n  → Medication adjustment was discussed — confirm status";
+      if (soap.includes("refer")) brief += "\n  → Referral was ordered — check if completed";
+    }
+    if (p.allg.length > 0) brief += `\n  Allergies: ${p.allg.join(", ")}`;
+    return brief;
+  }).join("\n\n");
+}
+function generateInboxReply(msg, patient) {
+  const body = msg.body.toLowerCase();
+  let reply = `Dear ${msg.from.split(" ")[0]},\n\nThank you for reaching out.`;
+  if (body.includes("refill") || body.includes("running low") || body.includes("medication")) {
+    const med = patient?.meds?.[0] || "your medication";
+    reply += `\n\nI've submitted a refill for ${med} to your pharmacy on file. It should be ready for pickup within 24 hours. If you have any issues, please contact the pharmacy directly and have them fax our office.`;
+  }
+  if (body.includes("swelling") || body.includes("swell") || body.includes("edema")) {
+    reply += `\n\nRegarding the swelling you mentioned — this can sometimes be a side effect of certain medications, particularly calcium channel blockers like amlodipine. I'd like to see you for a follow-up to examine this. Please schedule an appointment this week through our patient portal or call our office.`;
+    reply += `\n\nIn the meantime, try elevating your legs when resting. If you experience sudden shortness of breath, chest pain, or if the swelling becomes severe or painful, please go to the nearest emergency department immediately.`;
+  }
+  if (body.includes("appointment") || body.includes("confirm") || body.includes("schedule")) {
+    reply += `\n\nYour appointment is confirmed as scheduled. Please arrive 10 minutes early and bring your current medication list and insurance card.`;
+  }
+  if (body.includes("inhaler") || body.includes("rescue") || body.includes("breathing") || body.includes("pollen")) {
+    reply += `\n\nIf you're needing your rescue inhaler daily, that suggests your asthma is not optimally controlled. I'd recommend coming in sooner so we can reassess your controller medication. Please call our office to schedule an appointment this week. In the meantime, continue your current controller inhaler as prescribed.`;
+  }
+  if (body.includes("lab") || body.includes("result") || body.includes("numbers")) {
+    reply += `\n\nI'd be happy to review your lab results with you. Rather than explaining complex values over a message, I think it would be most helpful to discuss these during a brief appointment so I can answer all your questions and explain what the numbers mean for your health. Please schedule a follow-up at your convenience.`;
+  }
+  if (body.includes("knee") || body.includes("pain") || body.includes("worse") || body.includes("bother")) {
+    reply += `\n\nRegarding your pain concerns — please schedule a follow-up so we can properly evaluate this. In the meantime, you may use over-the-counter acetaminophen as directed for comfort, and try applying ice for 15-20 minutes at a time.`;
+  }
+  reply += `\n\nPlease don't hesitate to reach out if you have any other questions or concerns.\n\nBest regards,\nDr. [Your Name]`;
+  return reply;
+}
+function generateRosterAI(shifts, doctors) {
+  const results = [];
+
+  // 1. CRITICAL: Weekend coverage gaps
+  [5, 6].forEach(d => {
+    const dayShifts = shifts.filter(s => s.day === d);
+    if (dayShifts.length === 0) {
+      // Find best candidate to fill
+      const candidates = doctors.filter(doc => {
+        const hrs = shifts.filter(s => s.did === doc.id).reduce((a, s) => a + (s.e - s.s), 0);
+        return hrs < doc.max - 6 && doc.pref.includes(d);
+      });
+      const best = candidates[0] || doctors.find(d2 => d2.type === "Locum" || d2.type === "Staff");
+      const usedRooms = [...new Set(shifts.map(s => s.rm))];
+      const freeRoom = RMS.find(r => !usedRooms.includes(r)) || "Room 101";
+      results.push({
+        priority: "high",
+        title: `🚨 No coverage on ${FULL[d]}`,
+        detail: `The clinic is completely unstaffed on ${FULL[d]}. ${best ? `Recommended: Assign ${best.name} (${best.spec}) from 9:00–15:00 in ${freeRoom}. They have capacity remaining.` : "No available providers found — consider hiring a locum."}`,
+        fix: best ? {
+          did: best.id,
+          day: d,
+          s: 9,
+          e: 15,
+          rm: freeRoom,
+          label: `Add ${best.name.split(" ").pop()} to ${DAYS[d]} 9–15`
+        } : null
+      });
+    }
+  });
+
+  // 2. CRITICAL: Weekday zero-coverage hours
+  for (let d = 0; d < 5; d++) {
+    const gapHours = [];
+    for (let h = 8; h < 17; h++) {
+      const covering = shifts.filter(s => s.day === d && s.s <= h && s.e > h);
+      if (covering.length === 0) gapHours.push(h);
+    }
+    if (gapHours.length >= 2) {
+      const startGap = Math.min(...gapHours);
+      const endGap = Math.max(...gapHours) + 1;
+      results.push({
+        priority: "high",
+        title: `⚠ No coverage ${DAYS[d]} ${startGap}:00–${endGap}:00`,
+        detail: `${gapHours.length} hours with zero providers on ${FULL[d]}. Patients arriving during this window will have no physician available.`,
+        fix: null
+      });
+    }
+  }
+
+  // 3. Overwork / burnout risk
+  doctors.forEach(doc => {
+    const docShifts = shifts.filter(s => s.did === doc.id);
+    const hrs = docShifts.reduce((a, s) => a + (s.e - s.s), 0);
+    const pct = Math.round(hrs / doc.max * 100);
+    const daysWorked = [...new Set(docShifts.map(s => s.day))].length;
+    if (pct >= 100) {
+      results.push({
+        priority: "high",
+        title: `🔴 ${doc.name} is over capacity (${pct}%)`,
+        detail: `Scheduled ${hrs}h against ${doc.max}h maximum. This exceeds safe working limits and increases risk of medical errors. Immediate action needed.`,
+        fix: null
+      });
+    } else if (pct > 85) {
+      results.push({
+        priority: "medium",
+        title: `${doc.name} at ${pct}% capacity`,
+        detail: `Scheduled ${hrs}h of ${doc.max}h max across ${daysWorked} days. Approaching burnout threshold. Consider redistributing one shift.`,
+        fix: null
+      });
+    }
+
+    // 4. Consecutive day fatigue
+    const sortedDays = [...new Set(docShifts.map(s => s.day))].sort();
+    let maxConsecutive = 1,
+      current = 1;
+    for (let i = 1; i < sortedDays.length; i++) {
+      if (sortedDays[i] === sortedDays[i - 1] + 1) {
+        current++;
+        maxConsecutive = Math.max(maxConsecutive, current);
+      } else current = 1;
+    }
+    if (maxConsecutive >= 4) {
+      results.push({
+        priority: "medium",
+        title: `${doc.name}: ${maxConsecutive} consecutive days`,
+        detail: `Working ${maxConsecutive} days in a row without a break. Research shows clinical performance degrades significantly after 4+ consecutive days. Recommend inserting a rest day.`,
+        fix: null
+      });
+    }
+
+    // 5. Long shift detection
+    docShifts.forEach(s => {
+      if (s.e - s.s >= 10) {
+        results.push({
+          priority: "medium",
+          title: `${doc.name}: ${s.e - s.s}h shift on ${DAYS[s.day]}`,
+          detail: `Shifts over 10 hours significantly increase fatigue-related errors. Consider splitting into two shorter shifts or adding a relief provider for the afternoon portion.`,
+          fix: null
+        });
+      }
+    });
+  });
+
+  // 6. Single coverage risk
+  const singleCovSlots = [];
+  for (let d = 0; d < 5; d++) {
+    for (let h = 8; h < 17; h++) {
+      const covering = shifts.filter(s => s.day === d && s.s <= h && s.e > h);
+      if (covering.length === 1) singleCovSlots.push({
+        day: d,
+        hour: h,
+        doc: covering[0].did
+      });
+    }
+  }
+  if (singleCovSlots.length > 5) {
+    const worstDay = DAYS[[0, 1, 2, 3, 4].reduce((worst, d) => singleCovSlots.filter(s => s.day === d).length > singleCovSlots.filter(s => s.day === worst).length ? d : worst, 0)];
+    results.push({
+      priority: "medium",
+      title: `${singleCovSlots.length} single-coverage hours this week`,
+      detail: `If the sole provider calls in sick during these hours, the clinic has zero coverage. Worst day: ${worstDay}. Consider adding a backup provider or staggering shifts for overlap.`,
+      fix: null
+    });
+  }
+
+  // 7. Room conflicts (two doctors same room same time)
+  for (let d = 0; d < 7; d++) {
+    const dayShifts = shifts.filter(s => s.day === d);
+    for (let i = 0; i < dayShifts.length; i++) {
+      for (let j = i + 1; j < dayShifts.length; j++) {
+        const a = dayShifts[i],
+          b = dayShifts[j];
+        if (a.rm === b.rm && a.s < b.e && b.s < a.e) {
+          const docA = doctors.find(x => x.id === a.did);
+          const docB = doctors.find(x => x.id === b.did);
+          results.push({
+            priority: "high",
+            title: `🏥 Room conflict: ${a.rm} on ${DAYS[d]}`,
+            detail: `${docA?.name} (${a.s}:00–${a.e}:00) and ${docB?.name} (${b.s}:00–${b.e}:00) are both assigned to ${a.rm}. One must be moved to an available room.`,
+            fix: null
+          });
+        }
+      }
+    }
+  }
+
+  // 8. Specialty distribution analysis
+  const specByDay = {};
+  for (let d = 0; d < 5; d++) {
+    specByDay[d] = [...new Set(shifts.filter(s => s.day === d).map(s => doctors.find(x => x.id === s.did)?.spec).filter(Boolean))];
+  }
+  const allSpecs = [...new Set(doctors.map(d => d.spec))];
+  allSpecs.forEach(spec => {
+    const daysAvailable = Object.entries(specByDay).filter(([_, specs]) => specs.includes(spec)).length;
+    if (daysAvailable <= 1 && doctors.filter(d => d.spec === spec).length > 0) {
+      results.push({
+        priority: "low",
+        title: `${spec} only available ${daysAvailable} day(s)/week`,
+        detail: `Patients needing ${spec} have very limited scheduling options. Consider adding another day for this specialty to reduce wait times and improve access.`,
+        fix: null
+      });
+    }
+  });
+
+  // 9. Peak hour analysis
+  const peakHours = {};
+  for (let h = 8; h < 17; h++) {
+    let total = 0;
+    for (let d = 0; d < 5; d++) total += shifts.filter(s => s.day === d && s.s <= h && s.e > h).length;
+    peakHours[h] = total;
+  }
+  const maxCov = Math.max(...Object.values(peakHours));
+  const minCov = Math.min(...Object.values(peakHours));
+  if (maxCov > 0 && minCov === 0) {
+    const gapHour = Object.entries(peakHours).find(([_, v]) => v === 0);
+    if (gapHour) {
+      results.push({
+        priority: "medium",
+        title: `Coverage drops to zero at ${gapHour[0]}:00`,
+        detail: `Across the week, ${gapHour[0]}:00 has no provider coverage on some days while peak hours have up to ${maxCov} providers. Staggering shift start times would create more even distribution.`,
+        fix: null
+      });
+    }
+  }
+
+  // 10. Underutilized providers
+  doctors.forEach(doc => {
+    const hrs = shifts.filter(s => s.did === doc.id).reduce((a, s) => a + (s.e - s.s), 0);
+    if (hrs < doc.max * 0.4 && hrs > 0) {
+      results.push({
+        priority: "low",
+        title: `${doc.name} underutilized (${Math.round(hrs / doc.max * 100)}%)`,
+        detail: `Only ${hrs}h of ${doc.max}h capacity used. ${doc.spec} expertise is available but not being fully leveraged. Could take on more patients or cover gap hours.`,
+        fix: null
+      });
+    } else if (hrs === 0) {
+      results.push({
+        priority: "medium",
+        title: `${doc.name} has zero shifts scheduled`,
+        detail: `${doc.name} (${doc.spec}, ${doc.type}) is on the roster but has no shifts this week. Either assign shifts or confirm they are on leave.`,
+        fix: null
+      });
+    }
+  });
+
+  // 11. Room utilization
+  const usedRooms = [...new Set(shifts.map(s => s.rm))];
+  const unusedRooms = RMS.filter(r => !usedRooms.includes(r));
+  if (unusedRooms.length > 0) {
+    results.push({
+      priority: "low",
+      title: `${unusedRooms.length} rooms unused all week`,
+      detail: `${unusedRooms.join(", ")} — consider offering to visiting specialists or using for telehealth consultations to increase clinic revenue.`,
+      fix: null
+    });
+  }
+
+  // 12. Schedule efficiency score
+  const totalScheduledHours = shifts.reduce((a, s) => a + (s.e - s.s), 0);
+  const totalCapacity = doctors.reduce((a, d) => a + d.max, 0);
+  const efficiency = Math.round(totalScheduledHours / totalCapacity * 100);
+  const weekdayGaps = [0, 1, 2, 3, 4].reduce((count, d) => {
+    for (let h = 8; h < 17; h++) {
+      if (shifts.filter(s => s.day === d && s.s <= h && s.e > h).length === 0) count++;
+    }
+    return count;
+  }, 0);
+  results.push({
+    priority: efficiency > 70 ? "low" : "medium",
+    title: `📊 Schedule Efficiency Score: ${efficiency}%`,
+    detail: `Using ${totalScheduledHours}h of ${totalCapacity}h total provider capacity. ${weekdayGaps} uncovered weekday hours. ${efficiency > 80 ? "Well optimized." : efficiency > 60 ? "Room for improvement — fill gap hours to increase patient throughput." : "Significant underutilization — consider consolidating schedules or adding patient volume."}`,
+    fix: null
+  });
+
+  // Sort: high first, then medium, then low
+  const order = {
+    high: 0,
+    medium: 1,
+    low: 2
+  };
+  results.sort((a, b) => (order[a.priority] || 2) - (order[b.priority] || 2));
+  return results;
+}
+
+// ─── DATA ───────────────────────────────────────────────────────────────────
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+  FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+  HRS = Array.from({
+    length: 12
+  }, (_, i) => i + 7),
+  RMS = ["Room 101", "Room 102", "Room 103", "Room 104", "Room 201", "Room 202", "Room 203"];
+const C = [{
+  b: "#E8F5E9",
+  r: "#4CAF50",
+  t: "#2E7D32",
+  d: "#4CAF50"
+}, {
+  b: "#E3F2FD",
+  r: "#2196F3",
+  t: "#1565C0",
+  d: "#2196F3"
+}, {
+  b: "#FFF3E0",
+  r: "#FF9800",
+  t: "#E65100",
+  d: "#FF9800"
+}, {
+  b: "#F3E5F5",
+  r: "#9C27B0",
+  t: "#6A1B9A",
+  d: "#9C27B0"
+}, {
+  b: "#E0F7FA",
+  r: "#00BCD4",
+  t: "#00695C",
+  d: "#00BCD4"
+}, {
+  b: "#FBE9E7",
+  r: "#FF5722",
+  t: "#BF360C",
+  d: "#FF5722"
+}, {
+  b: "#FCE4EC",
+  r: "#E91E63",
+  t: "#880E4F",
+  d: "#E91E63"
+}, {
+  b: "#E8EAF6",
+  r: "#3F51B5",
+  t: "#283593",
+  d: "#3F51B5"
+}];
+const initPatients = [{
+  id: "p1",
+  name: "Margaret Chen",
+  age: 67,
+  sex: "F",
+  conds: ["Type 2 Diabetes", "Hypertension", "Osteoarthritis"],
+  meds: ["Metformin 1000mg BID", "Lisinopril 20mg daily", "Acetaminophen PRN"],
+  allg: ["Penicillin"],
+  visits: [{
+    date: "2026-02-12",
+    soap: "S: Improved fasting glucose, occasional knee pain. O: BP 142/88, Wt 168lbs. A: T2DM improving, HTN borderline. P: Continue metformin, consider BP med adjustment, order HbA1c + lipid panel, annual eye exam referral."
+  }],
+  labs: ["HbA1c (overdue 3wk)", "Lipid Panel"]
+}, {
+  id: "p2",
+  name: "James Rodriguez",
+  age: 44,
+  sex: "M",
+  conds: ["Generalized Anxiety Disorder", "GERD"],
+  meds: ["Sertraline 100mg daily", "Omeprazole 20mg daily"],
+  allg: [],
+  visits: [{
+    date: "2026-03-05",
+    soap: "S: Stable on SSRI, sleep improved, heartburn controlled. O: BP 124/78, HR 72. A: GAD stable, GERD controlled. P: Continue meds, f/u 3mo, stress management discussed."
+  }],
+  labs: []
+}, {
+  id: "p3",
+  name: "Priya Sharma",
+  age: 31,
+  sex: "F",
+  conds: ["Asthma (moderate persistent)", "Seasonal Allergies"],
+  meds: ["Fluticasone/Salmeterol 250/50 BID", "Albuterol PRN", "Cetirizine 10mg daily"],
+  allg: ["Sulfa drugs"],
+  visits: [{
+    date: "2026-01-28",
+    soap: "S: 2 exacerbations since Nov, rescue inhaler 3-4x/wk. O: Mild expiratory wheeze, O2 97%. A: Asthma suboptimal. P: Discuss step-up therapy, spirometry scheduled, verify inhaler technique."
+  }],
+  labs: ["Spirometry (Mar 25)"]
+}, {
+  id: "p4",
+  name: "David Park",
+  age: 58,
+  sex: "M",
+  conds: ["Hypertension", "Hyperlipidemia"],
+  meds: ["Amlodipine 5mg daily", "Atorvastatin 40mg daily"],
+  allg: [],
+  visits: [{
+    date: "2026-02-20",
+    soap: "S: BP stable, mild ankle swelling x1 week. O: BP 132/82, bilat 1+ pitting edema. A: HTN controlled, peripheral edema likely CCB-related. P: Monitor, consider ACE-I switch if worsens, recheck 4wk."
+  }],
+  labs: ["BMP (due next visit)"]
+}];
+const initMsgs = [{
+  id: "m1",
+  pid: "p4",
+  from: "David Park",
+  subj: "Medication Refill Request",
+  body: "Hi Doctor, I'm running low on my amlodipine 5mg. Can you send a refill? Also, the ankle swelling seems worse this week. Should I worry?",
+  time: "Mar 20, 8:45am",
+  read: false
+}, {
+  id: "m2",
+  pid: "p3",
+  from: "Priya Sharma",
+  subj: "Spirometry & Inhaler Use",
+  body: "Hello, confirming my spirometry on March 25th. Also needing my rescue inhaler almost daily now with pollen season. Should I come in sooner?",
+  time: "Mar 19, 4:20pm",
+  read: false
+}, {
+  id: "m3",
+  pid: "p1",
+  from: "Margaret Chen",
+  subj: "Lab Results Question",
+  body: "Dr., I saw lab results on my portal but can't read them. Can you explain? Also my knee has been worse lately.",
+  time: "Mar 18, 11:30am",
+  read: true
+}];
+const initDocs = [{
+  id: 1,
+  name: "Dr. Sarah Kim",
+  spec: "Family Medicine",
+  type: "Staff",
+  ci: 0,
+  max: 40,
+  pref: [0, 1, 2, 3, 4],
+  av: "SK"
+}, {
+  id: 2,
+  name: "Dr. Michael Torres",
+  spec: "Internal Medicine",
+  type: "Staff",
+  ci: 1,
+  max: 40,
+  pref: [0, 1, 2, 3, 4],
+  av: "MT"
+}, {
+  id: 3,
+  name: "Dr. Aisha Patel",
+  spec: "Pediatrics",
+  type: "Staff",
+  ci: 2,
+  max: 36,
+  pref: [0, 1, 3, 4],
+  av: "AP"
+}, {
+  id: 4,
+  name: "Dr. James Wu",
+  spec: "Cardiology",
+  type: "Visiting",
+  ci: 3,
+  max: 16,
+  pref: [1, 3],
+  av: "JW"
+}, {
+  id: 5,
+  name: "Dr. Elena Vasquez",
+  spec: "Dermatology",
+  type: "Visiting",
+  ci: 4,
+  max: 12,
+  pref: [0, 4],
+  av: "EV"
+}, {
+  id: 6,
+  name: "Dr. Omar Hassan",
+  spec: "Orthopedics",
+  type: "Consultant",
+  ci: 5,
+  max: 8,
+  pref: [2],
+  av: "OH"
+}];
+// Week helper: get Monday of a given week offset (0=current, 1=next, -1=previous)
+function getWeekStart(offset = 0) {
+  const d = new Date();
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  d.setDate(diff + offset * 7);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function weekKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+function formatWeekRange(date) {
+  const end = new Date(date);
+  end.setDate(end.getDate() + 6);
+  return `${date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  })} – ${end.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  })}`;
+}
+function getDateForDay(weekStart, dayIndex) {
+  const d = new Date(weekStart);
+  d.setDate(d.getDate() + dayIndex);
+  return d;
+}
+function getMondayForDate(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  d.setDate(diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+const THIS_WEEK = weekKey(getWeekStart(0));
+const initShifts = [{
+  id: 1,
+  did: 1,
+  day: 0,
+  s: 8,
+  e: 16,
+  rm: "Room 101",
+  wk: THIS_WEEK
+}, {
+  id: 2,
+  did: 1,
+  day: 2,
+  s: 8,
+  e: 16,
+  rm: "Room 101",
+  wk: THIS_WEEK
+}, {
+  id: 3,
+  did: 1,
+  day: 3,
+  s: 8,
+  e: 14,
+  rm: "Room 101",
+  wk: THIS_WEEK
+}, {
+  id: 4,
+  did: 1,
+  day: 4,
+  s: 9,
+  e: 17,
+  rm: "Room 101",
+  wk: THIS_WEEK
+}, {
+  id: 5,
+  did: 2,
+  day: 0,
+  s: 9,
+  e: 17,
+  rm: "Room 102",
+  wk: THIS_WEEK
+}, {
+  id: 6,
+  did: 2,
+  day: 1,
+  s: 10,
+  e: 16,
+  rm: "Room 102",
+  wk: THIS_WEEK
+}, {
+  id: 7,
+  did: 2,
+  day: 2,
+  s: 9,
+  e: 17,
+  rm: "Room 102",
+  wk: THIS_WEEK
+}, {
+  id: 8,
+  did: 2,
+  day: 3,
+  s: 9,
+  e: 17,
+  rm: "Room 102",
+  wk: THIS_WEEK
+}, {
+  id: 9,
+  did: 3,
+  day: 0,
+  s: 8,
+  e: 15,
+  rm: "Room 103",
+  wk: THIS_WEEK
+}, {
+  id: 10,
+  did: 3,
+  day: 1,
+  s: 8,
+  e: 15,
+  rm: "Room 103",
+  wk: THIS_WEEK
+}, {
+  id: 11,
+  did: 3,
+  day: 3,
+  s: 8,
+  e: 14,
+  rm: "Room 103",
+  wk: THIS_WEEK
+}, {
+  id: 12,
+  did: 4,
+  day: 1,
+  s: 9,
+  e: 17,
+  rm: "Room 201",
+  wk: THIS_WEEK
+}, {
+  id: 13,
+  did: 4,
+  day: 3,
+  s: 9,
+  e: 17,
+  rm: "Room 201",
+  wk: THIS_WEEK
+}, {
+  id: 14,
+  did: 5,
+  day: 0,
+  s: 10,
+  e: 16,
+  rm: "Room 202",
+  wk: THIS_WEEK
+}, {
+  id: 15,
+  did: 5,
+  day: 4,
+  s: 10,
+  e: 16,
+  rm: "Room 202",
+  wk: THIS_WEEK
+}, {
+  id: 16,
+  did: 6,
+  day: 2,
+  s: 8,
+  e: 16,
+  rm: "Room 203",
+  wk: THIS_WEEK
+}];
+
+// Icons
+const Ic = {
+  home: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"
+  }), /*#__PURE__*/React.createElement("polyline", {
+    points: "9 22 9 12 15 12 15 22"
+  })),
+  file: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
+  }), /*#__PURE__*/React.createElement("polyline", {
+    points: "14 2 14 8 20 8"
+  })),
+  mail: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"
+  }), /*#__PURE__*/React.createElement("polyline", {
+    points: "22,6 12,13 2,6"
+  })),
+  users: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"
+  }), /*#__PURE__*/React.createElement("circle", {
+    cx: "9",
+    cy: "7",
+    r: "4"
+  })),
+  cal: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("rect", {
+    x: "3",
+    y: "4",
+    width: "18",
+    height: "18",
+    rx: "2"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "16",
+    y1: "2",
+    x2: "16",
+    y2: "6"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "8",
+    y1: "2",
+    x2: "8",
+    y2: "6"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "3",
+    y1: "10",
+    x2: "21",
+    y2: "10"
+  })),
+  brain: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M12 2C8.13 2 5 5.13 5 9c0 2.38 1.19 4.47 3 5.74V17a2 2 0 002 2h4a2 2 0 002-2v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.87-3.13-7-7-7z"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "9",
+    y1: "21",
+    x2: "15",
+    y2: "21"
+  })),
+  spark: /*#__PURE__*/React.createElement("svg", {
+    width: "16",
+    height: "16",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("polygon", {
+    points: "12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+  })),
+  plus: /*#__PURE__*/React.createElement("svg", {
+    width: "14",
+    height: "14",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.5",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("line", {
+    x1: "12",
+    y1: "5",
+    x2: "12",
+    y2: "19"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "5",
+    y1: "12",
+    x2: "19",
+    y2: "12"
+  })),
+  send: /*#__PURE__*/React.createElement("svg", {
+    width: "14",
+    height: "14",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("line", {
+    x1: "22",
+    y1: "2",
+    x2: "11",
+    y2: "13"
+  }), /*#__PURE__*/React.createElement("polygon", {
+    points: "22 2 15 22 11 13 2 9 22 2"
+  })),
+  chk: /*#__PURE__*/React.createElement("svg", {
+    width: "13",
+    height: "13",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "3",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("polyline", {
+    points: "20 6 9 17 4 12"
+  })),
+  mic: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M19 10v2a7 7 0 01-14 0v-2"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "12",
+    y1: "19",
+    x2: "12",
+    y2: "23"
+  }), /*#__PURE__*/React.createElement("line", {
+    x1: "8",
+    y1: "23",
+    x2: "16",
+    y2: "23"
+  })),
+  stop: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("rect", {
+    x: "6",
+    y: "6",
+    width: "12",
+    height: "12",
+    rx: "2"
+  })),
+  key: /*#__PURE__*/React.createElement("svg", {
+    width: "18",
+    height: "18",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    viewBox: "0 0 24 24"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.78 7.78 5.5 5.5 0 017.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"
+  }))
+};
+
+// ─── APP ────────────────────────────────────────────────────────────────────
+function App() {
+  const [v, setV] = useState("dash");
+  const [pts, setPts] = useState(initPatients);
+  const [msgs, setMsgs] = useState(initMsgs);
+  const [docs, setDocs] = useState(initDocs);
+  const [shifts, setShifts] = useState(initShifts);
+  const [notif, setNotif] = useState(null);
+  const [selPt, setSelPt] = useState(null);
+  const [soapIn, setSoapIn] = useState("");
+  const [soapOut, setSoapOut] = useState("");
+  const [soapL, setSoapL] = useState(false);
+  const [selMsg, setSelMsg] = useState(null);
+  const [draft, setDraft] = useState("");
+  const [draftL, setDraftL] = useState(false);
+  const [prep, setPrep] = useState("");
+  const [prepL, setPrepL] = useState(false);
+  const [aiRes, setAiRes] = useState([]);
+  const [aiL, setAiL] = useState(false);
+  const [addSh, setAddSh] = useState(false);
+  const [nSh, setNSh] = useState({
+    did: 1,
+    day: 0,
+    s: 9,
+    e: 17,
+    rm: "Room 101"
+  });
+  const [editSh, setEditSh] = useState(null); // shift being edited
+  const [timeOff, setTimeOff] = useState([]); // {id,did,day,wk,reason}
+  const [addTimeOff, setAddTimeOff] = useState(null); // {did,day} when adding
+  const [toReason, setToReason] = useState("Vacation");
+  const [toStartDate, setToStartDate] = useState("");
+  const [toEndDate, setToEndDate] = useState("");
+  const [shiftStartDate, setShiftStartDate] = useState("");
+  const [shiftEndDate, setShiftEndDate] = useState("");
+  const [shiftSelectedDays, setShiftSelectedDays] = useState([0, 1, 2, 3, 4]); // Mon-Fri default
+  const [weekOffset, setWeekOffset] = useState(0);
+  const currentWeekStart = getWeekStart(weekOffset);
+  const currentWeekKey = weekKey(currentWeekStart);
+  const weekShifts = shifts.filter(s => s.wk === currentWeekKey);
+  const weekTimeOff = timeOff.filter(t => t.wk === currentWeekKey);
+  // Swap Requests
+  const [swapReqs, setSwapReqs] = useState([{
+    id: 1,
+    fromId: 3,
+    toId: 1,
+    shiftId: initShifts[10]?.id,
+    day: 3,
+    wk: THIS_WEEK,
+    reason: "School event for my daughter",
+    status: "pending",
+    date: new Date().toISOString().split("T")[0]
+  }, {
+    id: 2,
+    fromId: 2,
+    toId: null,
+    shiftId: initShifts[5]?.id,
+    day: 1,
+    wk: THIS_WEEK,
+    reason: "CME conference",
+    status: "pending",
+    date: new Date().toISOString().split("T")[0]
+  }]);
+  const [showSwapModal, setShowSwapModal] = useState(false);
+  const [newSwap, setNewSwap] = useState({
+    fromId: 1,
+    toId: null,
+    shiftId: null,
+    reason: ""
+  });
+  // Leave Balances (days per year)
+  const [leaveBalances, setLeaveBalances] = useState(() => {
+    const defaults = {};
+    initDocs.forEach(d => {
+      defaults[d.id] = {
+        vacation: 20,
+        sick: 10,
+        personal: 3,
+        used_vacation: 0,
+        used_sick: 0,
+        used_personal: 0
+      };
+    });
+    return defaults;
+  });
+  // Callout
+  const [showCallout, setShowCallout] = useState(false);
+  const [calloutDoc, setCalloutDoc] = useState(null);
+  const [calloutDay, setCalloutDay] = useState(0);
+  const [calloutReason, setCalloutReason] = useState("Sick");
+  // Compliance
+  const [complianceAlerts, setComplianceAlerts] = useState([]);
+  // API Key — persisted in localStorage (works on GitHub Pages)
+  const [apiKey, setApiKey] = useState(() => {
+    try {
+      return DOCTORDASH_API_KEY || localStorage.getItem("dd_apikey") || "";
+    } catch {
+      return "";
+    }
+  });
+  const [apiKeyInput, setApiKeyInput] = useState(() => {
+    try {
+      return DOCTORDASH_API_KEY || localStorage.getItem("dd_apikey") || "";
+    } catch {
+      return "";
+    }
+  });
+  const saveApiKey = k => {
+    setApiKey(k);
+    try {
+      localStorage.setItem("dd_apikey", k);
+    } catch {}
+  };
+  const clearApiKey = () => {
+    setApiKey("");
+    setApiKeyInput("");
+    try {
+      localStorage.removeItem("dd_apikey");
+    } catch {}
+  };
+  const [addPt, setAddPt] = useState(false);
+  const [nPt, setNPt] = useState({
+    name: "",
+    age: "",
+    sex: "M",
+    conds: "",
+    meds: "",
+    allg: ""
+  });
+  const [addDoc, setAddDoc] = useState(false);
+  const [nDoc, setNDoc] = useState({
+    name: "",
+    spec: "Family Medicine",
+    type: "Staff",
+    max: "40"
+  });
+  const [aiMode, setAiMode] = useState(() => {
+    try {
+      return DOCTORDASH_API_KEY || localStorage.getItem("dd_apikey") ? "live" : "local";
+    } catch {
+      return "local";
+    }
+  });
+  const [darkMode, setDarkMode] = useState(() => {
+    try {
+      return localStorage.getItem("dd_dark") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const toggleDark = () => {
+    setDarkMode(p => {
+      const v = !p;
+      try {
+        localStorage.setItem("dd_dark", v);
+      } catch {}
+      return v;
+    });
+  };
+  const [isRec, setIsRec] = useState(false);
+  const [recTime, setRecTime] = useState(0);
+  const [transcript, setTranscript] = useState("");
+  const [recStatus, setRecStatus] = useState("");
+  const recognitionRef = useRef(null);
+  const timerRef = useRef(null);
+  const isRecRef = useRef(false);
+  // Help Bot
+  const [botOpen, setBotOpen] = useState(false);
+  const [botMsgs, setBotMsgs] = useState([{
+    from: "bot",
+    text: "Hi! 👋 I'm DoctorDash Assistant. I can help you navigate any feature. What would you like to know?"
+  }]);
+  const [botInput, setBotInput] = useState("");
+  const [lastBotTopic, setLastBotTopic] = useState(null);
+  const botRef = useRef(null);
+  const botKB = [{
+    keys: ["dashboard", "home", "morning", "brief", "prep", "overview", "start", "main", "summary", "daily"],
+    topic: "Dashboard",
+    answer: "**Dashboard** shows your daily overview: patient count, unread messages, pending labs, and shifts today.\n\nTap **Morning Brief** to generate AI-powered prep summaries for all patients — highlighting key concerns, pending labs, and what to watch for.",
+    nav: "dash"
+  }, {
+    keys: ["soap", "note", "notes", "clinical", "documentation", "charting", "document", "chart", "write note", "create note"],
+    topic: "SOAP Notes",
+    answer: "**SOAP Notes** lets you generate clinical documentation:\n\n1. Select a patient from the dropdown\n2. Type quick notes (e.g. '45M f/u HTN, BP 138/86, no complaints')\n3. Tap **Generate SOAP Note**\n\nThe AI creates a full SOAP note with ICD-10 codes. You can also use **Voice Recording** to dictate or record a patient conversation.",
+    nav: "soap"
+  }, {
+    keys: ["voice", "record", "recording", "dictate", "microphone", "mic", "ambient", "speech", "talk", "speak", "conversation", "listen"],
+    topic: "Voice Recording",
+    answer: "**Voice Recording** captures doctor-patient conversations:\n\n1. Go to **SOAP Notes**\n2. Tap **Start Recording** (red button)\n3. Speak naturally during the visit\n4. Tap **Stop**\n5. AI extracts vitals, symptoms, medications, and plan items\n6. Click **Generate SOAP Note** to create the full note\n\n⚠ Works best in Chrome/Safari. Requires microphone permission.",
+    nav: "soap"
+  }, {
+    keys: ["inbox", "message", "reply", "patient message", "respond", "email", "communication", "portal"],
+    topic: "Inbox",
+    answer: "**Inbox** shows patient messages (refill requests, appointment questions, lab result inquiries).\n\n1. Tap a message to open it\n2. Tap **Generate Reply** — AI drafts a clinically appropriate response considering the patient's medical history\n3. Review, edit if needed, then **Send** or **Copy**",
+    nav: "inbox"
+  }, {
+    keys: ["roster", "schedule", "shift", "weekly", "calendar", "timetable", "rota", "duty", "assign", "assignment", "work schedule"],
+    topic: "Roster",
+    answer: "**Roster** is the weekly schedule grid:\n\n• Each row = a doctor, each column = a day\n• Tap a shift to **edit** time, room, or delete\n• Tap the **+** on an empty cell to add a shift\n• Use **← → arrows** to navigate weeks\n• **Copy to Next Week** duplicates the entire schedule\n• **Copy to Multiple Weeks** schedules ahead for a month+\n• **Date Range** mode lets you create shifts across many weeks at once",
+    nav: "roster"
+  }, {
+    keys: ["team", "add doctor", "provider", "remove doctor", "manage doctor", "staff list", "provider list", "workforce", "team page", "doctor list", "our doctors"],
+    topic: "Team",
+    answer: "**Team** page manages your providers:\n\n• View all doctors with specialty, type, hours, and capacity bar\n• Tap **Add Doctor** — enter name, specialty, type (Staff/Visiting/Locum/Consultant), and max hours\n• Tap **Remove** to delete a doctor and all their shifts",
+    nav: "team"
+  }, {
+    keys: ["time off", "vacation", "holiday", "leave", "day off", "sick day", "pto", "absence", "absent", "break", "rest day", "annual leave"],
+    topic: "Time Off",
+    answer: "**Time Off** can be added from:\n\n1. **Roster** → tap **🏖 Mark Time Off** button\n2. Select doctor, choose **Single Day** or **Date Range**\n3. Pick the reason (Vacation, Sick Leave, Conference, etc.)\n4. Existing shifts on those days are automatically removed\n\nOr: tap a shift → **Convert to Time Off** in the edit modal.\n\nRed **OFF** badges appear on the roster for marked days.",
+    nav: "roster"
+  }, {
+    keys: ["swap", "trade", "exchange", "switch shift", "cover", "coverage swap", "trade shift"],
+    topic: "Shift Swaps",
+    answer: "**Shift Swaps** let doctors trade shifts:\n\n1. Go to **Staff Hub** → tap **🔄 Request Swap**\n2. Select who wants to swap, and optionally with whom\n3. Enter the reason and submit\n4. Admin sees pending requests and can **Approve** or **Decline**\n5. Approved swaps auto-update the roster",
+    nav: "hub"
+  }, {
+    keys: ["callout", "sick call", "emergency", "replacement", "replaced", "replace", "called in", "call in", "call out", "absent today", "no show staff", "who covers", "coverage gap", "last minute", "inform", "informed", "notify", "notification"],
+    topic: "Callouts",
+    answer: "**Last-Minute Callout** handles same-day absences:\n\n1. Go to **Staff Hub** → tap **🚨 Callout**\n2. Select who's calling out, which day, and why\n3. Tap **Process Callout**\n\nThe AI automatically:\n• Removes their shift\n• Marks them as off\n• Deducts from leave balance\n• Finds the best available replacement doctor\n• Assigns the replacement to cover\n\n**How are doctors informed?**\nIn this demo, the replacement shows on-screen instantly. In the production version, the system would send **SMS + email notifications** to both the calling-out doctor (confirming their absence) and the replacement doctor (with shift details, time, and room).",
+    nav: "hub"
+  }, {
+    keys: ["compliance", "overtime", "labor", "hours", "rest", "fatigue", "burnout", "law", "regulation", "max hours", "overwork", "tired", "exhaustion"],
+    topic: "Compliance",
+    answer: "**Compliance Alerts** check for labor law violations:\n\n1. Go to **Staff Hub** → tap **⚖ Check Compliance**\n2. Scans for:\n   🔴 Over 48h/week (labor law limit)\n   🟡 Over 40h (overtime threshold)\n   🟡 Less than 11h rest between shifts\n   🔴 Shifts over 12h\n   🔵 Low leave balances",
+    nav: "hub"
+  }, {
+    keys: ["leave balance", "remaining", "days left", "sick days", "vacation days", "how many days", "pto balance", "entitlement"],
+    topic: "Leave Balances",
+    answer: "**Leave Balances** are tracked in **Staff Hub**:\n\n• Shows remaining Vacation, Sick, and Personal days per doctor\n• Auto-deducts when callouts are processed\n• Low balances highlighted in red\n• Default: 20 vacation, 10 sick, 3 personal days/year",
+    nav: "hub"
+  }, {
+    keys: ["ai", "optimizer", "optimize", "analysis", "coverage gap", "recommendation", "suggest", "improve", "efficiency", "smart"],
+    topic: "AI Optimizer",
+    answer: "**AI Schedule Optimizer** runs 12+ checks on your roster:\n\n1. Go to **AI Optimizer** → tap **Run Analysis**\n2. Analyzes: coverage gaps, overwork, consecutive days, room conflicts, specialty distribution, single-coverage risk, unused rooms, and more\n3. For critical gaps, shows **Apply Fix** buttons that auto-add shifts\n4. Shows a **Schedule Efficiency Score**",
+    nav: "rai"
+  }, {
+    keys: ["patient", "add patient", "new patient", "medical record", "patient list", "patient data"],
+    topic: "Patients",
+    answer: "**Patients** page lets you manage your patient panel:\n\n• View all patients with conditions, medications, allergies, and pending labs\n• Tap **Add Patient** — enter name, age, sex, conditions, medications, allergies\n• Tap any patient → goes to SOAP Notes with their context pre-loaded",
+    nav: "pts"
+  }, {
+    keys: ["staff hub", "staff", "hub", "manage staff", "staff management", "hr", "human resource", "personnel", "workforce management", "admin", "administrator"],
+    topic: "Staff Hub",
+    answer: "**Staff Hub** is your central admin panel for managing staff:\n\n• **🚨 Callout** — process last-minute sick calls with auto-replacement\n• **🔄 Request Swap** — manage shift trade requests between doctors\n• **⚖ Check Compliance** — scan for overtime, rest violations, burnout risk\n• **Leave Balances** — track remaining vacation, sick, personal days\n• **Swap Requests** — approve or decline pending swaps\n\nThis is where clinic administrators spend most of their time.",
+    nav: "hub"
+  }, {
+    keys: ["print", "export", "pdf", "share", "download"],
+    topic: "Export",
+    answer: "Currently, DoctorDash doesn't have a print/export feature built in. However, you can:\n\n• Use your browser's **Print** function (Ctrl+P / Cmd+P) on any page\n• **Copy** generated SOAP notes to paste into your EHR\n• Screenshot the roster view\n\nPDF export is planned for a future update."
+  }, {
+    keys: ["cost", "price", "pricing", "subscription", "pay", "how much", "plan", "billing", "fee"],
+    topic: "Pricing",
+    answer: "**DoctorDash Pricing (planned):**\n\n• **Essentials** — $29/mo per provider: Prep briefs, SOAP notes, summaries\n• **Pro** — $59/mo per provider: + Inbox AI, pre-auth letters, billing codes\n• **Clinic** — $99/mo per provider: + Multi-provider dashboard, team analytics\n\nCurrently in beta — all features are available."
+  }, {
+    keys: ["hipaa", "compliance", "compliant", "security", "secure", "privacy", "data protection", "patient data", "encryption", "baa", "phi", "protected health", "regulation"],
+    topic: "Security & HIPAA",
+    answer: "**Security & HIPAA Compliance:**\n\nDoctorDash is being built with healthcare compliance as a core requirement, not an afterthought.\n\n**Current demo:** Uses browser-based tools for rapid prototyping with simulated patient data.\n\n**Production architecture (in development):**\n✅ HIPAA-compliant medical transcription (AWS Transcribe Medical)\n✅ Full Business Associate Agreement (BAA) with all data processors\n✅ End-to-end encryption — TLS 1.3 in transit, AES-256 at rest\n✅ Server-side processing — no PHI stored on client devices\n✅ Role-based access control (RBAC)\n✅ Complete audit logging for all clinical actions\n✅ Patient consent workflow for voice recording\n✅ SOC 2 Type II compliant cloud infrastructure\n✅ Data residency options (Canada, US, EU)\n\nEvery feature is designed with the principle: **if it touches patient data, it must be encrypted, logged, and compliant.**"
+  }, {
+    keys: ["all features", "everything", "what can", "feature list", "capabilities", "what does", "how does this", "tour", "guide", "walkthrough"],
+    topic: "Overview",
+    answer: "**DoctorDash** is a complete AI-powered clinic management platform:\n\n📋 **Clinical:**\n• Dashboard & Morning Briefs\n• AI SOAP Note generation\n• Voice recording & transcription\n• Patient inbox with AI replies\n\n📅 **Scheduling:**\n• Weekly roster with week navigation\n• Team management\n• Time off & date ranges\n• AI Schedule Optimizer\n\n👥 **Staff Management:**\n• Last-minute callout handling\n• Shift swap requests\n• Compliance & overtime alerts\n• Leave balance tracking\n\nAsk me about any specific feature!"
+  }, {
+    keys: ["how", "work", "works", "use", "using", "explain", "tell me", "show me", "what is", "what are", "where"],
+    topic: null,
+    answer: null
+  }];
+  // Follow-up answers per topic
+  const botFollowups = {
+    "Callouts": [{
+      keys: ["notify", "inform", "informed", "told", "know", "aware", "sms", "email", "text", "message", "communication", "how will"],
+      answer: "**How doctors are informed:**\n\nIn this demo, the replacement shows on-screen instantly with a notification.\n\nIn production, the system would send:\n• **SMS + email** to the replacement doctor with shift details (time, room, patient load)\n• **Confirmation** to the calling-out doctor\n• **Alert to clinic manager** about the coverage change"
+    }, {
+      keys: ["how", "find", "pick", "choose", "select", "criteria", "best", "algorithm"],
+      answer: "The system picks a replacement by checking:\n1. Not already working that day\n2. Has remaining capacity (not over max hours)\n3. Available based on their preferred days\n\nThe first qualifying doctor is auto-assigned."
+    }, {
+      keys: ["no one", "nobody", "unavailable", "none", "can't find", "no replacement", "gap", "what if"],
+      answer: "If no replacement is found, you'll see a ⚠ warning: \"No replacement found — coverage gap!\" You'd then need to call a locum agency, ask someone to extend their shift, or manage reduced capacity."
+    }, {
+      keys: ["leave", "balance", "deduct", "count", "sick day"],
+      answer: "When a callout is processed, the system automatically deducts from the doctor's leave balance — sick calls deduct sick days, emergencies deduct personal days."
+    }],
+    "SOAP Notes": [{
+      keys: ["accurate", "correct", "icd", "code", "billing"],
+      answer: "The AI generates ICD-10 codes based on conditions mentioned in your notes. With Live AI (Claude), the coding is clinically aware. Always verify codes before billing."
+    }, {
+      keys: ["edit", "change", "modify", "fix"],
+      answer: "After generating, the note appears in a text box. You can **Copy** it and edit in your EHR, or tap **Save to Record** to store it in the patient's visit history."
+    }, {
+      keys: ["save", "store", "record", "export", "send"],
+      answer: "Tap **Save to Record** to store the note in the patient's visit history. Tap **Copy** to paste into your EHR system."
+    }],
+    "Voice Recording": [{
+      keys: ["not working", "error", "permission", "blocked", "denied"],
+      answer: "Voice recording needs **microphone permission** and works on **HTTPS** sites. On GitHub Pages it works fine. In the Claude app, it's blocked. Try opening in Chrome and allowing the mic when prompted."
+    }, {
+      keys: ["accurate", "understand", "language", "accent"],
+      answer: "It uses your browser's built-in speech recognition (Google/Apple). It works well with clear English. In production, we'd use a medical-grade transcription API for better accuracy."
+    }, {
+      keys: ["privacy", "hipaa", "secure", "data", "compliant", "compliance", "regulation"],
+      answer: "**HIPAA Compliance Roadmap:**\n\nThis demo uses browser-based speech recognition for rapid prototyping.\n\n**Production architecture includes:**\n✅ HIPAA-compliant medical transcription (AWS Transcribe Medical)\n✅ Full Business Associate Agreement (BAA)\n✅ End-to-end encryption (TLS in transit, AES-256 at rest)\n✅ Server-side audio processing — no data stored on client\n✅ Audit logging for all recordings\n✅ Patient consent workflow built-in\n✅ SOC 2 Type II compliant infrastructure\n\nWe're building compliance into the architecture from day one, not bolting it on later."
+    }],
+    "Roster": [{
+      keys: ["copy", "duplicate", "repeat", "next week", "template"],
+      answer: "Use **Copy to Next Week** to duplicate all shifts. Or **Copy to Multiple Weeks** — enter how many weeks ahead (e.g. 4 to schedule a month). The pattern copies exactly."
+    }, {
+      keys: ["edit", "change", "move", "modify", "update"],
+      answer: "Tap any shift block on the roster → the **Edit Shift** modal opens. Change start/end time, room, delete it, or convert it to time off."
+    }],
+    "Shift Swaps": [{
+      keys: ["approve", "accept", "decline", "reject", "pending"],
+      answer: "Pending swaps appear in **Staff Hub** with Approve/Decline buttons. When approved, the roster updates instantly — the shift moves to the new doctor."
+    }, {
+      keys: ["notify", "inform", "told", "know", "aware"],
+      answer: "In the demo, changes appear on-screen. In production, both doctors would receive **SMS + email notifications** when a swap is submitted, approved, or declined."
+    }],
+    "Staff Hub": [{
+      keys: ["how", "work", "use", "explain"],
+      answer: "The Staff Hub has 4 main tools:\n\n1. **🚨 Callout** — when someone calls in sick, process it in one click\n2. **🔄 Swap** — when doctors want to trade shifts\n3. **⚖ Compliance** — check for overtime violations\n4. **Leave Table** — see remaining days off per doctor\n\nAll changes automatically update the roster."
+    }],
+    "Compliance": [{
+      keys: ["fix", "resolve", "solve", "what do"],
+      answer: "When compliance issues are found, adjust the roster — reduce hours, add rest gaps, or redistribute shifts. The **AI Optimizer** can suggest specific fixes."
+    }, {
+      keys: ["law", "legal", "require", "regulation", "rule", "country"],
+      answer: "Default limits are based on common standards (EU Working Time Directive, Canadian labor laws): 48h/week max, 11h minimum rest, 12h max shift. These can be customized per jurisdiction in production."
+    }],
+    "Team": [{
+      keys: ["type", "staff", "visiting", "locum", "consultant", "difference"],
+      answer: "**Staff** = full-time employees. **Visiting** = part-time specialists. **Locum** = temporary fill-in doctors. **Consultant** = specialty consultants who come in for specific cases."
+    }],
+    "Time Off": [{
+      keys: ["multiple", "range", "week", "month", "two weeks"],
+      answer: "Use **Date Range** mode: pick a From and To date. It marks every day in that range as off and removes any existing shifts. Perfect for vacations."
+    }, {
+      keys: ["cancel", "remove", "undo", "change mind"],
+      answer: "Tap the red **OFF** badge on the roster → confirm to remove the time off. The day becomes available for scheduling again."
+    }],
+    "Inbox": [{
+      keys: ["safe", "review", "approve", "check", "accurate"],
+      answer: "The AI drafts the reply, but **you always review before sending**. It considers the patient's conditions, medications, and recent visits for context."
+    }, {
+      keys: ["real", "connect", "ehr", "integration"],
+      answer: "In the demo, messages are simulated. In production, this would connect to your EHR's patient portal (MyChart, Jane App, etc.) via API."
+    }]
+  };
+  const botAnswer = q => {
+    const lq = q.toLowerCase().replace(/[?!.,]/g, "");
+    const words = lq.split(/\s+/).filter(w => w.length >= 3);
+    const genericWords = ["how", "the", "does", "what", "where", "when", "will", "can", "this", "that", "with", "for", "about", "from", "have", "been", "being", "they", "their", "there", "which", "would", "could", "should", "also", "more"];
+    const isFollowUp = !!(lq.match(/\b(they|it|its|this|that|them|those|also|more|else|and|but|what about)\b/) && lastBotTopic);
+    const contentWords = words.filter(w => !genericWords.includes(w));
+
+    // 1. Check follow-ups for the last topic first
+    if (lastBotTopic && botFollowups[lastBotTopic]) {
+      let bestFU = null;
+      let bestFS = 0;
+      botFollowups[lastBotTopic].forEach(f => {
+        let score = 0;
+        f.keys.forEach(k => {
+          if (lq.includes(k)) score += k.split(" ").length * 5;
+        });
+        contentWords.forEach(w => {
+          f.keys.forEach(k => {
+            if (k === w) score += 3;else if (k.includes(w) && w.length >= 4) score += 2;
+          });
+        });
+        if (score > bestFS) {
+          bestFS = score;
+          bestFU = f;
+        }
+      });
+      if (bestFU && (bestFS >= 5 || isFollowUp && bestFS >= 3 || contentWords.length <= 2 && bestFS >= 3)) {
+        return {
+          answer: bestFU.answer,
+          topic: lastBotTopic
+        };
+      }
+    }
+
+    // 2. Score main KB entries
+    let bestMatch = null;
+    let bestScore = 0;
+    botKB.forEach(entry => {
+      if (!entry.answer) return;
+      let score = 0;
+      entry.keys.forEach(k => {
+        if (lq.includes(k)) score += k.split(" ").length * 4;
+      });
+      contentWords.forEach(w => {
+        entry.keys.forEach(k => {
+          if (k === w) score += 2;else if (k.includes(w) && w.length >= 4) score += 1;else if (w.includes(k) && k.length >= 4) score += 1;
+        });
+      });
+      if (entry.topic && lq.includes(entry.topic.toLowerCase())) score += 6;
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = entry;
+      }
+    });
+    if (bestMatch && bestScore >= 2) return {
+      ...bestMatch,
+      topic: bestMatch.topic
+    };
+
+    // 3. If seems like follow-up but no match, re-explain last topic
+    if (isFollowUp && lastBotTopic) {
+      const lastEntry = botKB.find(e => e.topic === lastBotTopic);
+      if (lastEntry) return {
+        answer: "Regarding **" + lastBotTopic + "**:\n\n" + lastEntry.answer,
+        nav: lastEntry.nav,
+        topic: lastBotTopic
+      };
+    }
+
+    // 4. Greeting
+    if (lq.match(/^(hi|hello|hey|help|thanks|thank|good|ok)\b/)) return {
+      answer: "Hi! I can help with any feature. Here are the main areas:\n\n📋 **SOAP Notes** — clinical documentation\n🎙 **Voice Recording** — ambient dictation\n📅 **Roster** — scheduling & shifts\n👥 **Staff Hub** — callouts, swaps, compliance\n🤖 **AI Optimizer** — schedule analysis\n🏖 **Time Off** — vacations & holidays\n\nJust ask about any of these!"
+    };
+
+    // 5. Smart fallback
+    let closestTopics = [];
+    botKB.forEach(entry => {
+      if (!entry.topic || !entry.answer) return;
+      let score = 0;
+      contentWords.forEach(w => {
+        entry.keys.forEach(k => {
+          if (k.includes(w) || w.includes(k)) score++;
+        });
+      });
+      if (score > 0) closestTopics.push({
+        topic: entry.topic,
+        score
+      });
+    });
+    closestTopics.sort((a, b) => b.score - a.score);
+    if (closestTopics.length > 0) {
+      const suggestions = closestTopics.slice(0, 3).map(t => "• **" + t.topic + "**").join("\n");
+      return {
+        answer: `I'm not sure exactly what you mean, but these might be related:\n\n${suggestions}\n\nTry asking about one of these, or say **"all features"** for a full overview.`
+      };
+    }
+    return {
+      answer: "I didn't quite catch that. Try asking about:\n\n• **SOAP Notes** — \"How do I create notes?\"\n• **Roster** — \"How does scheduling work?\"\n• **Staff Hub** — \"How do callouts work?\"\n• **All Features** — \"Show me everything\"\n\nOr tap one of the quick buttons below 👇"
+    };
+  };
+  const sendBotMsg = () => {
+    if (!botInput.trim()) return;
+    const userMsg = botInput.trim();
+    setBotMsgs(p => [...p, {
+      from: "user",
+      text: userMsg
+    }]);
+    setBotInput("");
+    const result = botAnswer(userMsg);
+    if (result.topic) setLastBotTopic(result.topic);
+    setTimeout(() => {
+      setBotMsgs(p => [...p, {
+        from: "bot",
+        text: result.answer,
+        nav: result.nav
+      }]);
+      setTimeout(() => {
+        if (botRef.current) botRef.current.scrollTop = botRef.current.scrollHeight;
+      }, 50);
+    }, 400);
+  };
+  const nid = useRef(20);
+  const fl = (m, t = "success") => {
+    setNotif({
+      m,
+      t
+    });
+    setTimeout(() => setNotif(null), 3000);
+  };
+
+  // ── Extract clinical info from conversation transcript ──
+  function extractClinicalNotes(text) {
+    const t = text.toLowerCase();
+    let notes = [];
+    // Age/Sex
+    const ageM = text.match(/(\d{1,3})\s*(?:year|yr|y\.?o)/i);
+    if (ageM) notes.push(ageM[1] + " year old");
+    if (t.includes("male") || t.includes(" man") || t.includes(" gentleman")) notes.push("male");
+    if (t.includes("female") || t.includes(" woman") || t.includes(" lady")) notes.push("female");
+    // Visit type
+    if (t.includes("follow up") || t.includes("follow-up") || t.includes("came back") || t.includes("returning")) notes.push("f/u visit");
+    if (t.includes("new patient") || t.includes("first time") || t.includes("first visit")) notes.push("new patient visit");
+    // Vitals mentioned
+    const bpM = text.match(/(\d{2,3}\s*(?:over|\/)\s*\d{2,3})/i);
+    if (bpM) notes.push("BP " + bpM[1].replace(/\s*over\s*/i, "/"));
+    const hrM = text.match(/(?:heart rate|pulse|HR)\s*(?:is|of|was)?\s*(\d{2,3})/i);
+    if (hrM) notes.push("HR " + hrM[1]);
+    const wtM = text.match(/(?:weight|weighs?)\s*(?:is|was)?\s*(\d{2,3})\s*(?:pounds|lbs|kg)?/i);
+    if (wtM) notes.push("Wt " + wtM[1]);
+    const tempM = text.match(/(?:temp|temperature)\s*(?:is|of|was)?\s*([\d.]+)/i);
+    if (tempM) notes.push("Temp " + tempM[1]);
+    // Symptoms
+    const symptoms = [];
+    if (t.includes("headache") || t.includes("head ache")) symptoms.push("headache");
+    if (t.includes("chest pain") || t.includes("chest discomfort")) symptoms.push("chest pain");
+    if (t.includes("shortness of breath") || t.includes("short of breath") || t.includes("difficulty breathing")) symptoms.push("SOB");
+    if (t.includes("dizzy") || t.includes("dizziness") || t.includes("lightheaded")) symptoms.push("dizziness");
+    if (t.includes("nausea") || t.includes("nauseous") || t.includes("throwing up") || t.includes("vomit")) symptoms.push("nausea/vomiting");
+    if (t.includes("cough")) symptoms.push("cough");
+    if (t.includes("fever") || t.includes("chills")) symptoms.push("fever/chills");
+    if (t.includes("fatigue") || t.includes("tired") || t.includes("exhausted")) symptoms.push("fatigue");
+    if (t.includes("swelling") || t.includes("swollen") || t.includes("edema")) symptoms.push("swelling");
+    if (t.includes("pain")) {
+      const painM = text.match(/(\w+)\s*pain/i);
+      symptoms.push(painM ? painM[0] : "pain");
+    }
+    if (t.includes("rash") || t.includes("itching") || t.includes("itchy")) symptoms.push("rash/pruritus");
+    if (t.includes("anxiety") || t.includes("anxious") || t.includes("worried") || t.includes("stress")) symptoms.push("anxiety");
+    if (t.includes("insomnia") || t.includes("can't sleep") || t.includes("trouble sleeping")) symptoms.push("insomnia");
+    if (t.includes("numbness") || t.includes("tingling")) symptoms.push("numbness/tingling");
+    if (symptoms.length > 0) notes.push("Symptoms: " + symptoms.join(", "));
+    // Negatives
+    const denies = [];
+    if (t.includes("no chest pain") || t.includes("denies chest pain")) denies.push("chest pain");
+    if (t.includes("no headache") || t.includes("denies headache")) denies.push("headache");
+    if (t.includes("no fever") || t.includes("no chills") || t.includes("afebrile")) denies.push("fever");
+    if (t.includes("no shortness") || t.includes("no difficulty breathing")) denies.push("SOB");
+    if (t.includes("no nausea") || t.includes("no vomiting")) denies.push("nausea/vomiting");
+    if (denies.length > 0) notes.push("Denies: " + denies.join(", "));
+    // Conditions
+    if (t.includes("diabetes") || t.includes("diabetic") || t.includes("blood sugar") || t.includes("a1c")) notes.push("DM discussed");
+    if (t.includes("hypertension") || t.includes("high blood pressure") || t.includes("blood pressure")) notes.push("HTN discussed");
+    if (t.includes("asthma") || t.includes("inhaler") || t.includes("wheez")) notes.push("Asthma discussed");
+    if (t.includes("cholesterol") || t.includes("lipid")) notes.push("Hyperlipidemia discussed");
+    if (t.includes("depression") || t.includes("depressed")) notes.push("Depression discussed");
+    // Medications mentioned
+    const meds = [];
+    const medList = ["metformin", "lisinopril", "amlodipine", "atorvastatin", "omeprazole", "sertraline", "fluticasone", "albuterol", "hydrochlorothiazide", "losartan", "gabapentin", "levothyroxine", "pantoprazole", "ibuprofen", "acetaminophen", "aspirin", "prednisone", "amoxicillin", "azithromycin", "insulin"];
+    medList.forEach(med => {
+      if (t.includes(med)) meds.push(med);
+    });
+    if (meds.length > 0) notes.push("Medications discussed: " + meds.join(", "));
+    // Plan items
+    const planItems = [];
+    if (t.includes("continue") || t.includes("keep taking")) planItems.push("continue current regimen");
+    if (t.includes("increase") || t.includes("raise the dose") || t.includes("bump up")) planItems.push("increase medication dose");
+    if (t.includes("decrease") || t.includes("lower") || t.includes("reduce")) planItems.push("decrease dose");
+    if (t.includes("new medication") || t.includes("start") || t.includes("prescribe") || t.includes("begin")) planItems.push("start new medication");
+    if (t.includes("lab") || t.includes("blood work") || t.includes("blood test")) planItems.push("order labs");
+    if (t.includes("x-ray") || t.includes("xray") || t.includes("imaging") || t.includes("ct scan") || t.includes("mri")) planItems.push("order imaging");
+    if (t.includes("refer") || t.includes("specialist") || t.includes("see a")) planItems.push("referral discussed");
+    if (t.includes("come back") || t.includes("follow up") || t.includes("see you") || t.includes("return")) {
+      const wkM = text.match(/(\d+)\s*weeks?/i);
+      const moM = text.match(/(\d+)\s*months?/i);
+      planItems.push("f/u " + (wkM ? wkM[1] + " weeks" : moM ? moM[1] + " months" : "as needed"));
+    }
+    if (planItems.length > 0) notes.push("Plan: " + planItems.join(", "));
+    // Build output
+    if (notes.length === 0) return text.slice(0, 500);
+    return notes.join(". ") + ".\n\n[Full transcript available for review]";
+  }
+
+  // ── Voice Recording ──
+  const startRecording = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      fl("Speech recognition not supported. Use Chrome or Safari.", "error");
+      return;
+    }
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    let final = transcript;
+    rec.onresult = e => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) final += e.results[i][0].transcript + " ";else interim += e.results[i][0].transcript;
+      }
+      setTranscript(final + interim);
+    };
+    rec.onerror = e => {
+      if (e.error !== "no-speech" && e.error !== "aborted") fl("Mic error: " + e.error, "error");
+    };
+    rec.onend = () => {
+      if (isRecRef.current) {
+        try {
+          rec.start();
+        } catch {}
+      }
+    };
+    rec.start();
+    recognitionRef.current = rec;
+    isRecRef.current = true;
+    setIsRec(true);
+    setRecStatus("listening");
+    setRecTime(0);
+    timerRef.current = setInterval(() => setRecTime(t => t + 1), 1000);
+    fl("Recording started — speak now");
+  };
+  const stopRecording = () => {
+    isRecRef.current = false;
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      recognitionRef.current = null;
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setIsRec(false);
+    setRecStatus("processing");
+    setTimeout(() => {
+      if (transcript.trim()) {
+        const extracted = extractClinicalNotes(transcript);
+        setSoapIn(prev => prev ? prev + "\n\n--- From Recording ---\n" + extracted : extracted);
+        fl("Transcript processed — review notes and generate SOAP");
+      }
+      setRecStatus("");
+    }, 800);
+  };
+  const clearRecording = () => {
+    setTranscript("");
+    setRecTime(0);
+    setRecStatus("");
+  };
+  const formatTime = s => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+
+  // ── Hybrid AI: try real Claude API with API key, fall back to local engine ──
+  const tryLiveAI = async (systemPrompt, userMessage) => {
+    if (!apiKey) return null;
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          messages: [{
+            role: "user",
+            content: systemPrompt + "\n\n" + userMessage
+          }]
+        })
+      });
+      const data = await res.json();
+      if (data.error) return null;
+      const text = data.content.filter(item => item.type === "text").map(item => item.text).join("\n");
+      if (text) {
+        setAiMode("live");
+        return text;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  const genSoap = async () => {
+    if (!soapIn.trim()) return;
+    setSoapL(true);
+    setSoapOut("");
+    const ctx = selPt ? `Patient: ${selPt.name}, ${selPt.age}${selPt.sex}. Conditions: ${selPt.conds.join(", ")}. Meds: ${selPt.meds.join(", ")}. Allergies: ${selPt.allg.join(", ") || "NKDA"}.` : "";
+    // Try live AI first
+    const liveResult = await tryLiveAI(`You are a medical documentation assistant. Generate a SOAP note with ICD-10 codes from the doctor's quick notes. Be concise, clinically accurate, with clear S/O/A/P sections.${ctx ? " Context: " + ctx : ""}`, `Generate SOAP note from: ${soapIn}`);
+    const result = liveResult || generateSOAPNote(soapIn, selPt);
+    if (!liveResult) setAiMode("local");
+    setSoapOut(result);
+    if (selPt) setPts(p => p.map(x => x.id === selPt.id ? {
+      ...x,
+      visits: [...x.visits, {
+        date: new Date().toISOString().split("T")[0],
+        soap: result
+      }]
+    } : x));
+    setSoapL(false);
+  };
+  const genReply = async () => {
+    if (!selMsg) return;
+    setDraftL(true);
+    setDraft("");
+    const pt = pts.find(p => p.id === selMsg.pid);
+    const ctx = pt ? `Patient: ${pt.name}, ${pt.age}${pt.sex}. Conditions: ${pt.conds.join(", ")}. Meds: ${pt.meds.join(", ")}.` : "";
+    const liveResult = await tryLiveAI(`You are a physician's AI assistant drafting a patient message reply. Professional, empathetic, clinically appropriate. Sign as "Dr. [Your Name]".${ctx ? " Context: " + ctx : ""}`, `Reply to:\nFrom: ${selMsg.from}\nSubject: ${selMsg.subj}\n\n${selMsg.body}`);
+    setDraft(liveResult || generateInboxReply(selMsg, pt));
+    if (!liveResult) setAiMode("local");
+    setDraftL(false);
+  };
+  const genPrep = async () => {
+    setPrepL(true);
+    setPrep("");
+    const sum = pts.map(p => `- ${p.name}, ${p.age}${p.sex}: ${p.conds.join(", ")}. Meds: ${p.meds.join(", ")}. Pending: ${p.labs.join(", ") || "none"}. Last: ${p.visits.at(-1)?.soap?.slice(0, 200) || "none"}`).join("\n");
+    const liveResult = await tryLiveAI("You are a clinical AI generating morning prep briefs. For each patient give 2-3 actionable sentences: key concerns, pending items, what to watch for. Use bullet format with patient names bolded.", `Morning prep for today's patients:\n\n${sum}`);
+    setPrep(liveResult || generatePrepBrief(pts));
+    if (!liveResult) setAiMode("local");
+    setPrepL(false);
+  };
+  const genRosterAI = async () => {
+    setAiL(true);
+    setAiRes([]);
+    await delay(800 + Math.random() * 600);
+    // Roster AI always uses local engine (more reliable for structured output)
+    setAiRes(generateRosterAI(shifts, docs));
+    setAiL(false);
+  };
+  const addShift = () => {
+    if (shiftStartDate && shiftEndDate) {
+      const start = new Date(shiftStartDate + "T12:00:00");
+      const end = new Date(shiftEndDate + "T12:00:00");
+      let count = 0;
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dayIdx = (d.getDay() + 6) % 7;
+        if (!shiftSelectedDays.includes(dayIdx)) continue;
+        const wkKey = weekKey(getMondayForDate(d));
+        setShifts(p => [...p, {
+          id: nid.current++,
+          did: nSh.did,
+          day: dayIdx,
+          s: nSh.s,
+          e: nSh.e,
+          rm: nSh.rm,
+          wk: wkKey
+        }]);
+        count++;
+      }
+      setAddSh(false);
+      setShiftStartDate("");
+      setShiftEndDate("");
+      fl(`${count} shifts added`);
+    } else {
+      setShifts(p => [...p, {
+        id: nid.current++,
+        ...nSh,
+        wk: currentWeekKey
+      }]);
+      setAddSh(false);
+      fl("Shift added");
+    }
+  };
+  const copyWeekTo = targetOffset => {
+    const targetKey = weekKey(getWeekStart(targetOffset));
+    const existing = shifts.filter(s => s.wk === targetKey);
+    if (existing.length > 0 && !confirm("Target week already has shifts. Add to existing?")) {
+      return;
+    }
+    const copied = weekShifts.map(s => ({
+      ...s,
+      id: nid.current++,
+      wk: targetKey
+    }));
+    setShifts(p => [...p, ...copied]);
+    fl(`Copied ${copied.length} shifts to ${formatWeekRange(getWeekStart(targetOffset))}`);
+  };
+  const clearWeek = () => {
+    if (!confirm(`Clear all ${weekShifts.length} shifts for this week?`)) return;
+    const wk = currentWeekKey;
+    setShifts(p => p.filter(s => s.wk !== wk));
+    fl("Week cleared");
+  };
+  const updateShift = (id, updates) => {
+    setShifts(p => p.map(s => s.id === id ? {
+      ...s,
+      ...updates
+    } : s));
+    setEditSh(null);
+    fl("Shift updated");
+  };
+  const addTimeOffFn = () => {
+    if (!addTimeOff) return;
+    if (toStartDate && toEndDate) {
+      const start = new Date(toStartDate + "T12:00:00");
+      const end = new Date(toEndDate + "T12:00:00");
+      let count = 0;
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dayIdx = (d.getDay() + 6) % 7;
+        const wkKey = weekKey(getMondayForDate(d));
+        setTimeOff(p => [...p, {
+          id: nid.current++,
+          did: addTimeOff.did,
+          day: dayIdx,
+          wk: wkKey,
+          reason: toReason
+        }]);
+        setShifts(p => p.filter(s => !(s.did === addTimeOff.did && s.day === dayIdx && s.wk === wkKey)));
+        count++;
+      }
+      setAddTimeOff(null);
+      setToReason("Vacation");
+      setToStartDate("");
+      setToEndDate("");
+      fl(`${count} days marked as off`);
+    } else {
+      setTimeOff(p => [...p, {
+        id: nid.current++,
+        did: addTimeOff.did,
+        day: addTimeOff.day,
+        wk: currentWeekKey,
+        reason: toReason
+      }]);
+      setShifts(p => p.filter(s => !(s.did === addTimeOff.did && s.day === addTimeOff.day && s.wk === currentWeekKey)));
+      setAddTimeOff(null);
+      setToReason("Vacation");
+      fl("Time off marked");
+    }
+  };
+  const removeTimeOff = id => {
+    setTimeOff(p => p.filter(t => t.id !== id));
+    fl("Time off removed");
+  };
+
+  // ── Swap Requests ──
+  const handleSwap = (swapId, action) => {
+    const swap = swapReqs.find(s => s.id === swapId);
+    if (!swap) return;
+    if (action === "approved" && swap.toId) {
+      // Reassign the shift to the new doctor
+      setShifts(p => p.map(s => s.id === swap.shiftId ? {
+        ...s,
+        did: swap.toId
+      } : s));
+    } else if (action === "approved" && !swap.toId) {
+      // Open swap — remove shift and mark time off
+      setShifts(p => p.filter(s => s.id !== swap.shiftId));
+      setTimeOff(p => [...p, {
+        id: nid.current++,
+        did: swap.fromId,
+        day: swap.day,
+        wk: swap.wk,
+        reason: "Swap (unassigned)"
+      }]);
+    }
+    setSwapReqs(p => p.map(s => s.id === swapId ? {
+      ...s,
+      status: action
+    } : s));
+    fl(action === "approved" ? "Swap approved — roster updated" : "Swap declined");
+  };
+  const submitSwap = () => {
+    if (!newSwap.fromId || !newSwap.reason) return;
+    const fromShifts = weekShifts.filter(s => s.did === newSwap.fromId);
+    const shift = fromShifts[0];
+    if (!shift) {
+      fl("No shift found for this doctor this week", "error");
+      return;
+    }
+    setSwapReqs(p => [...p, {
+      id: nid.current++,
+      fromId: newSwap.fromId,
+      toId: newSwap.toId || null,
+      shiftId: shift.id,
+      day: shift.day,
+      wk: currentWeekKey,
+      reason: newSwap.reason,
+      status: "pending",
+      date: new Date().toISOString().split("T")[0]
+    }]);
+    setShowSwapModal(false);
+    setNewSwap({
+      fromId: 1,
+      toId: null,
+      shiftId: null,
+      reason: ""
+    });
+    fl("Swap request submitted");
+  };
+  const pendingSwaps = swapReqs.filter(s => s.status === "pending").length;
+
+  // ── Last-Minute Callout ──
+  const processCallout = () => {
+    if (!calloutDoc) return;
+    const shift = weekShifts.find(s => s.did === calloutDoc && s.day === calloutDay);
+    // Find replacement — doctor with capacity who isn't already working that day
+    const replacement = docs.find(d => {
+      if (d.id === calloutDoc) return false;
+      const dShifts = weekShifts.filter(s => s.did === d.id);
+      const alreadyWorking = dShifts.some(s => s.day === calloutDay);
+      const hrs = dShifts.reduce((a, s) => a + (s.e - s.s), 0);
+      return !alreadyWorking && hrs < d.max - 4;
+    });
+    // Mark callout as time off
+    setTimeOff(p => [...p, {
+      id: nid.current++,
+      did: calloutDoc,
+      day: calloutDay,
+      wk: currentWeekKey,
+      reason: calloutReason === "Sick" ? "Sick Call" : "Emergency"
+    }]);
+    // Remove original shift
+    if (shift) setShifts(p => p.filter(s => s.id !== shift.id));
+    // Deduct from leave balance
+    setLeaveBalances(p => {
+      const b = {
+        ...p
+      };
+      if (b[calloutDoc]) {
+        if (calloutReason === "Sick") {
+          b[calloutDoc] = {
+            ...b[calloutDoc],
+            used_sick: b[calloutDoc].used_sick + 1
+          };
+        } else {
+          b[calloutDoc] = {
+            ...b[calloutDoc],
+            used_personal: b[calloutDoc].used_personal + 1
+          };
+        }
+      }
+      return b;
+    });
+    // Auto-assign replacement if found
+    if (replacement && shift) {
+      setShifts(p => [...p, {
+        id: nid.current++,
+        did: replacement.id,
+        day: calloutDay,
+        s: shift.s,
+        e: shift.e,
+        rm: shift.rm,
+        wk: currentWeekKey
+      }]);
+      fl(`${docs.find(d => d.id === calloutDoc)?.name} called out. ${replacement.name} auto-assigned as replacement.`);
+    } else {
+      fl(`${docs.find(d => d.id === calloutDoc)?.name} called out. ⚠ No replacement found — coverage gap!`, "error");
+    }
+    setShowCallout(false);
+    setCalloutDoc(null);
+  };
+
+  // ── Leave Balance Helpers ──
+  const getLeaveBalance = docId => {
+    const b = leaveBalances[docId];
+    if (!b) return {
+      vacation: 20,
+      sick: 10,
+      personal: 3,
+      used_vacation: 0,
+      used_sick: 0,
+      used_personal: 0
+    };
+    return b;
+  };
+  const getTotalUsed = docId => {
+    const b = getLeaveBalance(docId);
+    return b.used_vacation + b.used_sick + b.used_personal;
+  };
+  const getTotalRemaining = docId => {
+    const b = getLeaveBalance(docId);
+    return b.vacation - b.used_vacation + (b.sick - b.used_sick) + (b.personal - b.used_personal);
+  };
+
+  // ── Compliance Check ──
+  const checkCompliance = () => {
+    const alerts = [];
+    docs.forEach(doc => {
+      const allDocShifts = shifts.filter(s => s.did === doc.id);
+      const weekHrs = weekShifts.filter(s => s.did === doc.id).reduce((a, s) => a + (s.e - s.s), 0);
+      // Max weekly hours (labor law: typically 48-60h depending on jurisdiction)
+      if (weekHrs > 48) alerts.push({
+        type: "critical",
+        doc: doc.name,
+        msg: `Working ${weekHrs}h this week — exceeds 48h labor limit`
+      });else if (weekHrs > 40) alerts.push({
+        type: "warning",
+        doc: doc.name,
+        msg: `Working ${weekHrs}h this week — approaching overtime threshold`
+      });
+      // Check for insufficient rest between shifts (min 11h in many jurisdictions)
+      const docWeekShifts = weekShifts.filter(s => s.did === doc.id).sort((a, b) => a.day - b.day);
+      for (let i = 0; i < docWeekShifts.length - 1; i++) {
+        const end = docWeekShifts[i].e;
+        const nextStart = docWeekShifts[i + 1].s;
+        const restHours = (docWeekShifts[i + 1].day - docWeekShifts[i].day) * 24 + (nextStart - end);
+        if (restHours < 11 && docWeekShifts[i + 1].day === docWeekShifts[i].day + 1) {
+          alerts.push({
+            type: "warning",
+            doc: doc.name,
+            msg: `Only ${restHours}h rest between ${DAYS[docWeekShifts[i].day]} and ${DAYS[docWeekShifts[i + 1].day]} — minimum 11h required`
+          });
+        }
+      }
+      // Shift length check
+      docWeekShifts.forEach(s => {
+        if (s.e - s.s > 12) alerts.push({
+          type: "critical",
+          doc: doc.name,
+          msg: `${s.e - s.s}h shift on ${DAYS[s.day]} exceeds 12h maximum`
+        });
+      });
+      // Leave balance warnings
+      const lb = getLeaveBalance(doc.id);
+      if (lb.sick - lb.used_sick <= 1) alerts.push({
+        type: "warning",
+        doc: doc.name,
+        msg: `Only ${lb.sick - lb.used_sick} sick day(s) remaining`
+      });
+      if (lb.vacation - lb.used_vacation <= 2) alerts.push({
+        type: "info",
+        doc: doc.name,
+        msg: `Only ${lb.vacation - lb.used_vacation} vacation day(s) remaining`
+      });
+    });
+    setComplianceAlerts(alerts);
+    return alerts;
+  };
+  const addPatient = () => {
+    setPts(p => [...p, {
+      id: "p" + Date.now(),
+      name: nPt.name,
+      age: +nPt.age || 0,
+      sex: nPt.sex,
+      conds: nPt.conds.split(",").map(s => s.trim()).filter(Boolean),
+      meds: nPt.meds.split(",").map(s => s.trim()).filter(Boolean),
+      allg: nPt.allg.split(",").map(s => s.trim()).filter(Boolean),
+      visits: [],
+      labs: []
+    }]);
+    setAddPt(false);
+    setNPt({
+      name: "",
+      age: "",
+      sex: "M",
+      conds: "",
+      meds: "",
+      allg: ""
+    });
+    fl("Patient added");
+  };
+  const addDoctor = () => {
+    const id = docs.length + 1 + Math.floor(Math.random() * 100);
+    const ci = docs.length % C.length;
+    const av = nDoc.name.split(" ").filter(w => w.length > 0).map(w => w[0].toUpperCase()).slice(0, 2).join("");
+    setDocs(p => [...p, {
+      id,
+      name: nDoc.name.startsWith("Dr.") ? nDoc.name : "Dr. " + nDoc.name,
+      spec: nDoc.spec,
+      type: nDoc.type,
+      ci,
+      max: +nDoc.max || 40,
+      pref: nDoc.type === "Staff" ? [0, 1, 2, 3, 4] : nDoc.type === "Visiting" ? [1, 3] : [2, 4],
+      av: av || "DR"
+    }]);
+    setAddDoc(false);
+    setNDoc({
+      name: "",
+      spec: "Family Medicine",
+      type: "Staff",
+      max: "40"
+    });
+    fl("Doctor added");
+  };
+  const removeDoctor = id => {
+    setDocs(p => p.filter(d => d.id !== id));
+    setShifts(p => p.filter(s => s.did !== id));
+    fl("Doctor and their shifts removed");
+  };
+  const unread = msgs.filter(m => !m.read).length;
+  return /*#__PURE__*/React.createElement("div", {
+    className: darkMode ? "dk" : "",
+    style: {
+      fontFamily: "'Inter',sans-serif",
+      background: darkMode ? "#0C111D" : "#F9FAFB",
+      minHeight: "100vh",
+      color: darkMode ? "#F5F5F6" : "#101828",
+      display: "flex"
+    }
+  }, /*#__PURE__*/React.createElement("style", null, `
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+.S{width:240px;background:#0C111D;color:#fff;position:fixed;top:0;left:0;bottom:0;display:flex;flex-direction:column;z-index:100;border-right:1px solid #1F242F}
+.S .lo{padding:20px;font-size:16px;font-weight:700;display:flex;align-items:center;gap:10px;border-bottom:1px solid #1F242F;letter-spacing:-0.3px}
+.S .dt{width:8px;height:8px;background:#17B26A;border-radius:50%;box-shadow:0 0 8px rgba(23,178,106,.5)}
+.S nav{padding:12px 10px;flex:1;overflow-y:auto}
+.S .ns{font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#475467;padding:16px 12px 6px;font-weight:600}
+.S .ni{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;color:#94969C;transition:all .15s;border:none;background:none;width:100%;text-align:left;font-family:inherit}
+.S .ni:hover{background:rgba(255,255,255,.05);color:#F5F5F6}
+.S .ni.a{background:rgba(23,178,106,.12);color:#47CD89}
+.bg{background:#F04438;color:#fff;font-size:9px;font-weight:700;padding:1px 6px;border-radius:99px;margin-left:auto}
+.M{margin-left:240px;padding:24px 32px;flex:1;min-height:100vh}
+.hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+.tt{font-size:24px;font-weight:700;letter-spacing:-0.5px;color:#101828}
+.su{font-size:13px;color:#667085;margin-top:3px}
+.bt{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .15s;border:1px solid transparent}
+.bp{background:#17B26A;color:#fff;border-color:#17B26A}.bp:hover{background:#079455}
+.bs{background:#fff;color:#344054;border:1px solid #D0D5DD}.bs:hover{background:#F9FAFB}
+.bd{background:#FEF3F2;color:#B42318;border:1px solid #FECDCA}
+.cd{background:#fff;border-radius:12px;border:1px solid #EAECF0;padding:20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.ct{font-size:15px;font-weight:600;margin-bottom:12px;color:#101828}
+.ip{width:100%;padding:10px 14px;border-radius:8px;border:1px solid #D0D5DD;font-size:14px;font-family:inherit;outline:none;resize:vertical;color:#101828;box-shadow:0 1px 2px rgba(16,24,40,.05)}.ip:focus{border-color:#17B26A;box-shadow:0 0 0 3px rgba(23,178,106,.15)}
+.sl{width:100%;padding:10px 14px;border-radius:8px;border:1px solid #D0D5DD;font-size:14px;font-family:inherit;background:#fff;outline:none;appearance:auto;color:#101828;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.lb{font-size:13px;font-weight:500;color:#344054;margin-bottom:6px;display:block}
+.ig{margin-bottom:14px}
+.tg{display:inline-block;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:500;margin:2px 2px 2px 0}
+.av{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0}
+.ov{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(16,24,40,.55);z-index:1000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
+.ml{background:#fff;border-radius:16px;padding:28px;max-width:480px;width:92%;box-shadow:0 20px 60px rgba(16,24,40,.18);max-height:90vh;overflow-y:auto}
+.mtt{font-size:18px;font-weight:700;margin-bottom:20px;color:#101828;letter-spacing:-0.3px}
+.nf{position:fixed;top:16px;right:16px;padding:12px 20px;border-radius:10px;font-size:13px;font-weight:500;z-index:2000;animation:si .3s;box-shadow:0 8px 24px rgba(16,24,40,.12)}
+.nf.s{background:#ECFDF3;color:#067647;border:1px solid #ABEFC6}.nf.e{background:#FEF3F2;color:#B42318;border:1px solid #FECDCA}
+@keyframes si{from{transform:translateY(-12px);opacity:0}to{transform:translateY(0);opacity:1}}
+.ou{background:#F9FAFB;border:1px solid #EAECF0;border-radius:10px;padding:16px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.7;white-space:pre-wrap;max-height:450px;overflow-y:auto;color:#344054}
+.gr{display:grid;grid-template-columns:60px repeat(7,1fr);background:#fff;border-radius:12px;border:1px solid #EAECF0;overflow:hidden}
+.gh{background:#F9FAFB;padding:10px 4px;text-align:center;font-size:12px;font-weight:600;color:#344054;border-bottom:1px solid #EAECF0}
+.gt{padding:3px 5px;text-align:right;font-size:10px;color:#98A2B3;font-family:'JetBrains Mono',monospace;border-right:1px solid #EAECF0;min-height:40px;display:flex;align-items:flex-start;justify-content:flex-end}
+.gc{border-right:1px solid #F2F4F7;border-bottom:1px solid #F2F4F7;min-height:40px;position:relative;padding:1px}
+.sh{border-radius:6px;padding:3px 5px;font-size:10px;font-weight:500;cursor:pointer;border-left:3px solid;line-height:1.2;position:absolute;left:1px;right:1px;overflow:hidden;z-index:5;transition:all .1s}
+.sh:hover{transform:scale(1.03);box-shadow:0 2px 8px rgba(16,24,40,.08);z-index:10}
+.ac{background:linear-gradient(135deg,#ECFDF3,#EFF8FF);border:1px solid #ABEFC6;border-radius:10px;padding:14px;margin-bottom:10px}
+.pr{display:inline-block;padding:2px 8px;border-radius:6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.pu{animation:pu 2s infinite}@keyframes pu{0%,100%{opacity:1}50%{opacity:.3}}
+.mr{display:flex;align-items:flex-start;gap:12px;padding:12px;border-radius:8px;cursor:pointer;transition:background .15s;border-bottom:1px solid #F2F4F7}.mr:hover{background:#F9FAFB}.mr.u{background:#ECFDF3}
+.pg{height:6px;background:#EAECF0;border-radius:99px;overflow:hidden}.pgb{height:100%;border-radius:99px;transition:width .5s}
+@media(max-width:768px){.S{width:56px}.S .lo span,.S .ns,.S .ni span,.S .bg{display:none}.S .ni{justify-content:center;padding:10px}.M{margin-left:56px;padding:16px}}
+.dk .M{background:#0C111D}
+.dk .cd{background:#1D2939;border-color:#344054;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.dk .hd{border-color:#344054}
+.dk .tt{color:#F5F5F6}
+.dk .su{color:#94969C}
+.dk .ct{color:#F5F5F6}
+.dk .lb{color:#CECFD2}
+.dk .ip,.dk .sl{background:#1D2939;border-color:#475467;color:#F5F5F6}
+.dk .ip::placeholder{color:#667085}
+.dk .ip:focus{border-color:#17B26A}
+.dk .bt.bs{background:#1D2939;border-color:#475467;color:#CECFD2}
+.dk .bt.bs:hover{background:#344054}
+.dk .bt.bd{background:#55160C;border-color:#912018;color:#FDA29B}
+.dk .ou{background:#1D2939;border-color:#344054;color:#D0D5DD}
+.dk .tg{background:#1D2939!important;color:#CECFD2!important}
+.dk .mr{border-color:#344054}.dk .mr:hover{background:#1D2939}.dk .mr.u{background:#053321}
+.dk .gh{background:#1D2939;color:#CECFD2;border-color:#344054}
+.dk .gc{border-color:#344054}
+.dk .gt{color:#667085}
+.dk .nf.s{background:#053321;color:#47CD89;border-color:#085D3A}
+.dk .nf.e{background:#55160C;color:#FDA29B;border-color:#912018}
+.dk .ov{background:rgba(0,0,0,.7)}
+.dk .ml{background:#1D2939;border-color:#344054;color:#F5F5F6;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+.dk .mtt{color:#F5F5F6;border-color:#344054}
+.dk .pg{background:#344054}
+.dk .av{border:1px solid #475467}
+.dk .ns{color:#667085}
+.dk table{color:#D0D5DD}
+.dk table thead tr{background:#1D2939!important}
+.dk table tr{border-color:#344054!important}
+.dk .S{background:#0C111D;border-color:#1F242F}
+`), notif && /*#__PURE__*/React.createElement("div", {
+    className: `nf ${notif.t === "success" ? "s" : "e"}`
+  }, notif.m), /*#__PURE__*/React.createElement("div", {
+    className: "S"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lo"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dt"
+  }), /*#__PURE__*/React.createElement("span", null, "DoctorDash")), /*#__PURE__*/React.createElement("nav", null, /*#__PURE__*/React.createElement("div", {
+    className: "ns"
+  }, /*#__PURE__*/React.createElement("span", null, "Clinical")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "dash" ? "a" : ""}`,
+    onClick: () => setV("dash")
+  }, Ic.home, /*#__PURE__*/React.createElement("span", null, "Dashboard")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "pts" ? "a" : ""}`,
+    onClick: () => setV("pts")
+  }, Ic.users, /*#__PURE__*/React.createElement("span", null, "Patients")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "soap" ? "a" : ""}`,
+    onClick: () => setV("soap")
+  }, Ic.file, /*#__PURE__*/React.createElement("span", null, "SOAP Notes")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "inbox" ? "a" : ""}`,
+    onClick: () => setV("inbox")
+  }, Ic.mail, /*#__PURE__*/React.createElement("span", null, "Inbox"), unread > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "bg"
+  }, unread)), /*#__PURE__*/React.createElement("div", {
+    className: "ns"
+  }, /*#__PURE__*/React.createElement("span", null, "Scheduling")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "team" ? "a" : ""}`,
+    onClick: () => setV("team")
+  }, Ic.users, /*#__PURE__*/React.createElement("span", null, "Team")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "roster" ? "a" : ""}`,
+    onClick: () => setV("roster")
+  }, Ic.cal, /*#__PURE__*/React.createElement("span", null, "Roster")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "hub" ? "a" : ""}`,
+    onClick: () => setV("hub")
+  }, Ic.users, /*#__PURE__*/React.createElement("span", null, "Staff Hub"), pendingSwaps > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "bg"
+  }, pendingSwaps)), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "rai" ? "a" : ""}`,
+    onClick: () => setV("rai")
+  }, Ic.brain, /*#__PURE__*/React.createElement("span", null, "AI Optimizer")), /*#__PURE__*/React.createElement("div", {
+    className: "ns"
+  }, /*#__PURE__*/React.createElement("span", null, "System")), /*#__PURE__*/React.createElement("button", {
+    className: `ni ${v === "settings" ? "a" : ""}`,
+    onClick: () => setV("settings")
+  }, Ic.key, /*#__PURE__*/React.createElement("span", null, "AI Settings"), !apiKey && /*#__PURE__*/React.createElement("span", {
+    className: "bg"
+  }, "!"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 10,
+      borderTop: "1px solid rgba(255,255,255,.06)",
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 9,
+      color: "rgba(255,255,255,.3)"
+    }
+  }, aiMode === "live" ? "🟢 Live AI" : "🔵 Smart Engine"), /*#__PURE__*/React.createElement("button", {
+    onClick: toggleDark,
+    style: {
+      background: "rgba(255,255,255,.08)",
+      border: "none",
+      borderRadius: 8,
+      padding: "5px 12px",
+      color: "rgba(255,255,255,.5)",
+      fontSize: 10,
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      fontFamily: "inherit"
+    }
+  }, darkMode ? "☀️ Light Mode" : "🌙 Dark Mode"))), /*#__PURE__*/React.createElement("div", {
+    className: "M"
+  }, v === "dash" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, new Date().getHours() < 12 ? "Good morning" : "Good afternoon", ", Doctor"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  }), " \xB7 ", pts.length, " patients today")), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: genPrep,
+    disabled: prepL
+  }, prepL ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "pu"
+  }, "\u26A1"), " Generating...") : /*#__PURE__*/React.createElement(React.Fragment, null, Ic.spark, " Morning Brief"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))",
+      gap: 10,
+      marginBottom: 18
+    }
+  }, [{
+    n: pts.length,
+    l: "Patients",
+    c: "#1A6B5A"
+  }, {
+    n: unread,
+    l: "Unread",
+    c: "#2196F3"
+  }, {
+    n: pts.reduce((a, p) => a + p.labs.length, 0),
+    l: "Pending Labs",
+    c: "#FF9800"
+  }, {
+    n: shifts.filter(s => s.day === 4).length,
+    l: "Shifts Today",
+    c: "#9C27B0"
+  }].map((s, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "cd",
+    style: {
+      textAlign: "center",
+      padding: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 26,
+      fontFamily: "'Fraunces',serif",
+      fontWeight: 700,
+      color: s.c
+    }
+  }, s.n), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#888"
+    }
+  }, s.l)))), !apiKey && /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      background: "#FFFBEB",
+      borderColor: "#FDE68A",
+      cursor: "pointer"
+    },
+    onClick: () => setV("settings")
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      fontSize: 12,
+      color: "#92400E"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 16
+    }
+  }, "\uD83D\uDCA1"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", null, "Smart Engine active"), " \u2014 tap here to add your Claude API key for live AI-powered notes and replies"))), prepL && /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      textAlign: "center",
+      padding: 28
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "pu",
+    style: {
+      fontSize: 28
+    }
+  }, "\uD83E\uDDE0"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#888",
+      fontSize: 12,
+      marginTop: 6
+    }
+  }, "Analyzing patient records...")), prep && /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "\u2600 Morning Prep Brief"), /*#__PURE__*/React.createElement("div", {
+    className: "ou"
+  }, prep)), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "Today's Patients"), pts.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    key: p.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      padding: "8px 0",
+      borderBottom: "1px solid #F0F2F4",
+      cursor: "pointer"
+    },
+    onClick: () => {
+      setSelPt(p);
+      setV("soap");
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "av",
+    style: {
+      background: C[i % 8].d
+    }
+  }, p.name.split(" ").map(w => w[0]).join("")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12.5
+    }
+  }, p.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: "#888"
+    }
+  }, p.age, p.sex, " \xB7 ", p.conds.join(", "))), p.labs.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "tg",
+    style: {
+      background: "#FFF3E0",
+      color: "#E65100"
+    }
+  }, p.labs.length, " pending"))))), v === "pts" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Patients"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, pts.length, " on file")), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => setAddPt(true)
+  }, Ic.plus, " Add Patient")), pts.map((p, i) => /*#__PURE__*/React.createElement("div", {
+    key: p.id,
+    className: "cd",
+    style: {
+      cursor: "pointer"
+    },
+    onClick: () => {
+      setSelPt(p);
+      setV("soap");
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "av",
+    style: {
+      background: C[i % 8].d,
+      width: 40,
+      height: 40,
+      fontSize: 13
+    }
+  }, p.name.split(" ").map(w => w[0]).join("")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 14
+    }
+  }, p.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#888"
+    }
+  }, p.age, p.sex, " \xB7 Allergies: ", p.allg.join(", ") || "NKDA"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, p.conds.map(c => /*#__PURE__*/React.createElement("span", {
+    key: c,
+    className: "tg",
+    style: {
+      background: "#E8F5E9",
+      color: "#2E7D32"
+    }
+  }, c))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4
+    }
+  }, p.meds.map(m => /*#__PURE__*/React.createElement("span", {
+    key: m,
+    className: "tg",
+    style: {
+      background: "#E3F2FD",
+      color: "#1565C0"
+    }
+  }, m)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#888"
+    }
+  }, p.visits.length, " visits"))))), v === "soap" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "SOAP Note Drafter"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "Type notes, dictate, or record a conversation"))), /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      background: isRec ? "#FFF5F5" : recStatus === "processing" ? "#FFFBEB" : "#F0FFF8",
+      borderColor: isRec ? "#FCA5A5" : recStatus === "processing" ? "#FDE68A" : "#A7F3D0"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, Ic.mic, " Voice Recording"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 12,
+      marginBottom: 12
+    }
+  }, !isRec && recStatus !== "" ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pu",
+    style: {
+      fontSize: 16
+    }
+  }, "\u23F3"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: "#92400E",
+      fontWeight: 500
+    }
+  }, "Processing transcript...")) : !isRec ? /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      background: "#DC2626",
+      color: "#fff",
+      padding: "10px 20px",
+      borderRadius: 20
+    },
+    onClick: startRecording
+  }, Ic.mic, " Start Recording") : /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      background: "#1a1a2e",
+      color: "#fff",
+      padding: "10px 20px",
+      borderRadius: 20
+    },
+    onClick: stopRecording
+  }, Ic.stop, " Stop (", formatTime(recTime), ")"), isRec && /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      fontSize: 12,
+      color: "#DC2626",
+      fontWeight: 600
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pu",
+    style: {
+      width: 8,
+      height: 8,
+      background: "#DC2626",
+      borderRadius: "50%",
+      display: "inline-block"
+    }
+  }), " RECORDING"), transcript && !isRec && recStatus === "" && /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    style: {
+      fontSize: 10,
+      padding: "5px 12px"
+    },
+    onClick: clearRecording
+  }, "Clear")), transcript && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#fff",
+      border: "1px solid #E5E9ED",
+      borderRadius: 8,
+      padding: 12,
+      maxHeight: 150,
+      overflowY: "auto",
+      fontSize: 11.5,
+      color: "#333",
+      lineHeight: 1.6,
+      fontFamily: "'JetBrains Mono',monospace"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 9,
+      color: "#888",
+      textTransform: "uppercase",
+      letterSpacing: 1,
+      fontWeight: 600,
+      marginBottom: 6
+    }
+  }, "Live Transcript"), transcript), !transcript && !isRec && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#888",
+      lineHeight: 1.5
+    }
+  }, "Tap ", /*#__PURE__*/React.createElement("strong", null, "Start Recording"), " to capture a doctor-patient conversation. The AI will automatically extract vitals, symptoms, diagnoses, medications, and plan items from the conversation and prepare them for SOAP note generation.", /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      padding: "6px 10px",
+      background: "#EFF6FF",
+      border: "1px solid #BFDBFE",
+      borderRadius: 6,
+      fontSize: 10,
+      color: "#1E40AF"
+    }
+  }, "\uD83D\uDD12 ", /*#__PURE__*/React.createElement("strong", null, "Production version"), " uses HIPAA-compliant medical transcription with end-to-end encryption, BAA coverage, and audit logging."))), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Patient"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: selPt?.id || "",
+    onChange: e => setSelPt(pts.find(p => p.id === e.target.value) || null)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "-- Select patient --"), pts.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p.id,
+    value: p.id
+  }, p.name, " (", p.age, p.sex, ")")))), selPt && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#F8FAFB",
+      borderRadius: 7,
+      padding: 10,
+      marginBottom: 12,
+      fontSize: 11.5,
+      color: "#555"
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Context:"), " ", selPt.conds.join(", "), " \xB7 Meds: ", selPt.meds.join(", "), " \xB7 Allergies: ", selPt.allg.join(", ") || "NKDA"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Clinical Notes ", soapIn.includes("From Recording") ? "(includes recording data)" : ""), /*#__PURE__*/React.createElement("textarea", {
+    className: "ip",
+    rows: 5,
+    placeholder: "Type quick notes here, or use voice recording above. Example: 45M f/u HTN. BP 138/86. Taking lisinopril 20. Lost 4 lbs. No HA, no CP. Continue current plan, recheck 6 weeks.",
+    value: soapIn,
+    onChange: e => setSoapIn(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: genSoap,
+    disabled: soapL || !soapIn.trim()
+  }, soapL ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "pu"
+  }, "\u26A1"), " Generating...") : /*#__PURE__*/React.createElement(React.Fragment, null, Ic.spark, " Generate SOAP Note")), soapIn && /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => {
+      setSoapIn("");
+      setSoapOut("");
+      setTranscript("");
+    }
+  }, "Clear All"))), soapOut && /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "Generated SOAP Note"), /*#__PURE__*/React.createElement("div", {
+    className: "ou"
+  }, soapOut), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => fl("Note saved to patient record")
+  }, Ic.chk, " Save to Record"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => {
+      navigator.clipboard?.writeText(soapOut);
+      fl("Copied to clipboard");
+    }
+  }, "Copy")))), v === "inbox" && !selMsg && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Inbox"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, unread, " unread messages"))), msgs.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.id,
+    className: `mr ${!m.read ? "u" : ""}`,
+    onClick: () => {
+      setSelMsg(m);
+      setDraft("");
+      setMsgs(p => p.map(x => x.id === m.id ? {
+        ...x,
+        read: true
+      } : x));
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "av",
+    style: {
+      background: !m.read ? "#1A6B5A" : "#999"
+    }
+  }, m.from.split(" ").map(w => w[0]).join("")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: !m.read ? 700 : 500,
+      fontSize: 13
+    }
+  }, m.from), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#888"
+    }
+  }, m.time)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: !m.read ? 600 : 400,
+      marginTop: 2
+    }
+  }, m.subj), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#888",
+      marginTop: 3
+    }
+  }, m.body.slice(0, 100), "..."))))), v === "inbox" && selMsg && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, selMsg.subj), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "From: ", selMsg.from, " \xB7 ", selMsg.time)), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setSelMsg(null)
+  }, "\u2190 Back")), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      lineHeight: 1.7
+    }
+  }, selMsg.body)), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct",
+    style: {
+      marginBottom: 0
+    }
+  }, "AI Draft Reply"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: genReply,
+    disabled: draftL
+  }, draftL ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "pu"
+  }, "\u26A1"), " Drafting...") : /*#__PURE__*/React.createElement(React.Fragment, null, Ic.spark, " Generate Reply"))), draft ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "ou"
+  }, draft), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => fl("Reply sent")
+  }, Ic.send, " Send"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => {
+      navigator.clipboard?.writeText(draft);
+      fl("Copied");
+    }
+  }, "Copy"))) : !draftL && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#888",
+      fontSize: 12,
+      padding: 16,
+      textAlign: "center"
+    }
+  }, "Click \"Generate Reply\" to draft a response"))), v === "team" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Team"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, docs.length, " providers at this location")), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => setAddDoc(true)
+  }, Ic.plus, " Add Doctor")), docs.map(d => {
+    const h = shifts.filter(s => s.did === d.id).reduce((a, s) => a + (s.e - s.s), 0);
+    const pct = Math.round(h / d.max * 100);
+    return /*#__PURE__*/React.createElement("div", {
+      key: d.id,
+      className: "cd"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 12,
+        alignItems: "flex-start"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "av",
+      style: {
+        background: C[d.ci].d,
+        width: 42,
+        height: 42,
+        fontSize: 14
+      }
+    }, d.av), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 600,
+        fontSize: 14
+      }
+    }, d.name), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: "#888",
+        marginTop: 2
+      }
+    }, d.spec), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6,
+        marginTop: 8,
+        flexWrap: "wrap"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "tg",
+      style: {
+        background: d.type === "Staff" ? "#E8F5E9" : d.type === "Visiting" ? "#E3F2FD" : d.type === "Locum" ? "#FFF3E0" : "#F3E5F5",
+        color: d.type === "Staff" ? "#2E7D32" : d.type === "Visiting" ? "#1565C0" : d.type === "Locum" ? "#E65100" : "#6A1B9A"
+      }
+    }, d.type), /*#__PURE__*/React.createElement("span", {
+      className: "tg",
+      style: {
+        background: "#F5F5F5",
+        color: "#555"
+      }
+    }, h, "h / ", d.max, "h week"), /*#__PURE__*/React.createElement("span", {
+      className: "tg",
+      style: {
+        background: "#F5F5F5",
+        color: "#555"
+      }
+    }, "Prefers: ", d.pref.map(i => DAYS[i]).join(", "))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 10,
+        color: "#888",
+        marginBottom: 3
+      }
+    }, /*#__PURE__*/React.createElement("span", null, "Weekly capacity"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: pct > 90 ? "#DC2626" : pct > 70 ? "#E65100" : "#2E7D32"
+      }
+    }, pct, "%")), /*#__PURE__*/React.createElement("div", {
+      className: "pg"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "pgb",
+      style: {
+        width: `${Math.min(pct, 100)}%`,
+        background: pct > 90 ? "#DC2626" : pct > 70 ? "#FF9800" : "#2DD4A1"
+      }
+    })))), /*#__PURE__*/React.createElement("button", {
+      className: "bt bd",
+      style: {
+        padding: "5px 10px",
+        fontSize: 10
+      },
+      onClick: () => {
+        if (confirm(`Remove ${d.name} and all their shifts?`)) removeDoctor(d.id);
+      }
+    }, "Remove")));
+  })), v === "roster" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Weekly Roster"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, docs.length, " providers \xB7 ", weekShifts.length, " shifts this week")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setAddDoc(true)
+  }, Ic.plus, " Add Doctor"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => setAddSh(true)
+  }, Ic.plus, " Add Shift"))), /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "12px 16px",
+      flexWrap: "wrap",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    style: {
+      padding: "6px 14px",
+      fontSize: 11
+    },
+    onClick: () => setWeekOffset(w => w - 1)
+  }, "\u2190 Prev Week"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14,
+      fontFamily: "'Fraunces',serif"
+    }
+  }, formatWeekRange(currentWeekStart)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: weekOffset === 0 ? "#1A6B5A" : "#888",
+      fontWeight: weekOffset === 0 ? 600 : 400,
+      marginTop: 2
+    }
+  }, weekOffset === 0 ? "Current Week" : weekOffset > 0 ? `${weekOffset} week${weekOffset > 1 ? "s" : ""} ahead` : `${Math.abs(weekOffset)} week${Math.abs(weekOffset) > 1 ? "s" : ""} ago`)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 4
+    }
+  }, weekOffset !== 0 && /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    style: {
+      padding: "6px 10px",
+      fontSize: 10
+    },
+    onClick: () => setWeekOffset(0)
+  }, "Today"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    style: {
+      padding: "6px 14px",
+      fontSize: 11
+    },
+    onClick: () => setWeekOffset(w => w + 1)
+  }, "Next Week \u2192"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 12,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    style: {
+      fontSize: 10,
+      padding: "5px 12px"
+    },
+    onClick: () => copyWeekTo(weekOffset + 1)
+  }, "\uD83D\uDCCB Copy to Next Week"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    style: {
+      fontSize: 10,
+      padding: "5px 12px"
+    },
+    onClick: () => {
+      const w = prompt("Copy to how many weeks ahead? (e.g. 2, 4, 8)");
+      if (w && !isNaN(w)) {
+        for (let i = 1; i <= parseInt(w); i++) copyWeekTo(weekOffset + i);
+      }
+    }
+  }, "\uD83D\uDCC5 Copy to Multiple Weeks"), /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      fontSize: 10,
+      padding: "5px 12px",
+      background: "#FFF3E0",
+      color: "#E65100",
+      border: "1px solid #FFE0B2"
+    },
+    onClick: () => {
+      const did = docs[0]?.id;
+      if (did) setAddTimeOff({
+        did,
+        day: 0
+      });
+    }
+  }, "\uD83C\uDFD6 Mark Time Off"), weekShifts.length > 0 && /*#__PURE__*/React.createElement("button", {
+    className: "bt bd",
+    style: {
+      fontSize: 10,
+      padding: "5px 12px"
+    },
+    onClick: clearWeek
+  }, "\uD83D\uDDD1 Clear Week"), weekTimeOff.length > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "#DC2626",
+      display: "flex",
+      alignItems: "center",
+      gap: 4
+    }
+  }, "\u26D4 ", weekTimeOff.length, " day(s) off this week")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))",
+      gap: 6,
+      marginBottom: 14
+    }
+  }, DAYS.map((d, di) => {
+    const dayShifts = weekShifts.filter(s => s.day === di);
+    const dayDocs = [...new Set(dayShifts.map(s => s.did))];
+    const totalHrs = dayShifts.reduce((a, s) => a + (s.e - s.s), 0);
+    const dateObj = getDateForDay(currentWeekStart, di);
+    const isToday = weekOffset === 0 && di === (new Date().getDay() + 6) % 7;
+    return /*#__PURE__*/React.createElement("div", {
+      key: d,
+      style: {
+        background: isToday ? "#E8F8F2" : "#fff",
+        border: "1px solid " + (isToday ? "#A7F3D0" : dayDocs.length === 0 ? "#FECACA" : "#E5E9ED"),
+        borderRadius: 9,
+        padding: 8,
+        textAlign: "center"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 600,
+        color: isToday ? "#1A6B5A" : "#555"
+      }
+    }, d), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 9,
+        color: "#aaa"
+      }
+    }, dateObj.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric"
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 18,
+        fontFamily: "'Fraunces',serif",
+        fontWeight: 700,
+        color: dayDocs.length === 0 ? "#DC2626" : "#1a1a2e",
+        marginTop: 2
+      }
+    }, dayDocs.length), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 8,
+        color: "#888"
+      }
+    }, totalHrs, "h"));
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      padding: 0,
+      overflow: "auto"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 700
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "160px repeat(7,1fr)",
+      background: "#F8FAFB",
+      borderBottom: "2px solid #E5E9ED"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "10px 14px",
+      fontWeight: 600,
+      fontSize: 12,
+      color: "#555"
+    }
+  }, "Provider"), DAYS.map((d, i) => {
+    const dateObj = getDateForDay(currentWeekStart, i);
+    const isToday = weekOffset === 0 && i === (new Date().getDay() + 6) % 7;
+    return /*#__PURE__*/React.createElement("div", {
+      key: d,
+      style: {
+        padding: "8px 4px",
+        textAlign: "center",
+        fontWeight: 600,
+        fontSize: 11,
+        color: isToday ? "#1A6B5A" : "#555",
+        background: isToday ? "#E8F8F2" : "transparent"
+      }
+    }, /*#__PURE__*/React.createElement("div", null, d), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 9,
+        fontWeight: 400,
+        color: isToday ? "#1A6B5A" : "#aaa"
+      }
+    }, dateObj.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric"
+    })));
+  })), docs.map(doc => {
+    const c = C[doc.ci];
+    const docShifts = weekShifts.filter(s => s.did === doc.id);
+    const hrs = docShifts.reduce((a, s) => a + (s.e - s.s), 0);
+    const pct = Math.round(hrs / doc.max * 100);
+    return /*#__PURE__*/React.createElement("div", {
+      key: doc.id,
+      style: {
+        display: "grid",
+        gridTemplateColumns: "160px repeat(7,1fr)",
+        borderBottom: "1px solid #F0F2F4",
+        minHeight: 56
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: "8px 10px",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        borderRight: "1px solid #F0F2F4"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "av",
+      style: {
+        background: c.d,
+        width: 28,
+        height: 28,
+        fontSize: 9,
+        flexShrink: 0
+      }
+    }, doc.av), /*#__PURE__*/React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 600,
+        fontSize: 11,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis"
+      }
+    }, doc.name), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 9,
+        color: "#888"
+      }
+    }, doc.spec), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 3,
+        marginTop: 2
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: 36,
+        height: 3,
+        background: "#E5E9ED",
+        borderRadius: 2,
+        overflow: "hidden"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: "100%",
+        width: `${Math.min(pct, 100)}%`,
+        background: pct > 90 ? "#DC2626" : pct > 70 ? "#FF9800" : "#2DD4A1",
+        borderRadius: 2
+      }
+    })), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 8,
+        color: pct > 90 ? "#DC2626" : "#888"
+      }
+    }, hrs, "h")))), DAYS.map((_, di) => {
+      const dayShift = docShifts.find(s => s.day === di);
+      const isToday = weekOffset === 0 && di === (new Date().getDay() + 6) % 7;
+      const dayOff = weekTimeOff.find(t => t.did === doc.id && t.day === di);
+      return /*#__PURE__*/React.createElement("div", {
+        key: di,
+        style: {
+          padding: 3,
+          borderRight: "1px solid #F0F2F4",
+          background: isToday ? "#FBFFFE" : dayOff ? "#FFF5F5" : "transparent",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center"
+        }
+      }, dayOff ? /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: "100%",
+          textAlign: "center",
+          padding: "6px 4px",
+          borderRadius: 6,
+          background: "#FEF2F2",
+          border: "1px solid #FECACA",
+          cursor: "pointer"
+        },
+        onClick: () => {
+          if (confirm(`Remove ${doc.name}'s time off on ${DAYS[di]}?`)) removeTimeOff(dayOff.id);
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 9,
+          fontWeight: 700,
+          color: "#DC2626"
+        }
+      }, "OFF"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 8,
+          color: "#EF4444"
+        }
+      }, dayOff.reason)) : dayShift ? /*#__PURE__*/React.createElement("div", {
+        onClick: () => setEditSh({
+          ...dayShift,
+          docName: doc.name
+        }),
+        style: {
+          background: c.b,
+          border: `1px solid ${c.r}`,
+          borderRadius: 7,
+          padding: "4px 5px",
+          cursor: "pointer",
+          width: "100%",
+          textAlign: "center",
+          transition: "transform 0.15s"
+        },
+        onMouseEnter: e => e.currentTarget.style.transform = "scale(1.05)",
+        onMouseLeave: e => e.currentTarget.style.transform = "scale(1)"
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 700,
+          fontSize: 10.5,
+          color: c.t
+        }
+      }, dayShift.s, ":00\u2013", dayShift.e, ":00"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 8.5,
+          color: c.t,
+          opacity: 0.7
+        }
+      }, dayShift.rm)) : /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: "100%",
+          height: "100%",
+          minHeight: 36,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 2,
+          cursor: "pointer",
+          borderRadius: 6,
+          border: "1px dashed #E0E0E0",
+          opacity: 0.3,
+          transition: "opacity 0.15s"
+        },
+        onClick: () => {
+          setNSh({
+            did: doc.id,
+            day: di,
+            s: 9,
+            e: 17,
+            rm: "Room 101"
+          });
+          setAddSh(true);
+        },
+        onMouseEnter: e => e.currentTarget.style.opacity = "0.7",
+        onMouseLeave: e => e.currentTarget.style.opacity = "0.3",
+        onContextMenu: e => {
+          e.preventDefault();
+          setAddTimeOff({
+            did: doc.id,
+            day: di
+          });
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 14,
+          color: "#ccc"
+        }
+      }, "+")));
+    }));
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8,
+      marginTop: 12,
+      padding: "10px 14px",
+      background: "#fff",
+      borderRadius: 9,
+      border: "1px solid #E5E9ED",
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 600,
+      color: "#888",
+      marginRight: 4
+    }
+  }, "PROVIDERS:"), docs.map(d => /*#__PURE__*/React.createElement("div", {
+    key: d.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      fontSize: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 9,
+      height: 9,
+      borderRadius: 3,
+      background: C[d.ci].d
+    }
+  }), /*#__PURE__*/React.createElement("span", null, d.name.split(" ").pop())))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      fontSize: 10,
+      color: "#999",
+      textAlign: "center"
+    }
+  }, "Tap shift to edit \xB7 Tap + to add \xB7 Right-click + for time off \xB7 Use \u2190 \u2192 to navigate weeks")), v === "hub" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "Staff Hub"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "Swaps, leave balances, callouts & compliance")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      background: "#DC2626",
+      color: "#fff",
+      fontSize: 11
+    },
+    onClick: () => {
+      setShowCallout(true);
+      setCalloutDoc(docs[0]?.id);
+      setCalloutDay((new Date().getDay() + 6) % 7);
+    }
+  }, "\uD83D\uDEA8 Callout"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      fontSize: 11
+    },
+    onClick: () => setShowSwapModal(true)
+  }, "\uD83D\uDD04 Request Swap"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    style: {
+      fontSize: 11
+    },
+    onClick: () => {
+      checkCompliance();
+      fl("Compliance check complete");
+    }
+  }, "\u2696 Check Compliance"))), complianceAlerts.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      borderColor: complianceAlerts.some(a => a.type === "critical") ? "#FECACA" : "#FFE0B2"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "\u2696 Compliance Alerts"), complianceAlerts.map((a, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 8,
+      padding: "8px 0",
+      borderBottom: i < complianceAlerts.length - 1 ? "1px solid #F0F2F4" : "none"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 14
+    }
+  }, a.type === "critical" ? "🔴" : a.type === "warning" ? "🟡" : "🔵"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12
+    }
+  }, a.doc), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#555"
+    }
+  }, a.msg))))), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "\uD83D\uDD04 Swap Requests ", pendingSwaps > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "tg",
+    style: {
+      background: "#FFF3E0",
+      color: "#E65100",
+      marginLeft: 8
+    }
+  }, pendingSwaps, " pending")), swapReqs.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#888",
+      fontSize: 12,
+      padding: 16,
+      textAlign: "center"
+    }
+  }, "No swap requests") : swapReqs.map(swap => {
+    const from = docs.find(d => d.id === swap.fromId);
+    const to = swap.toId ? docs.find(d => d.id === swap.toId) : null;
+    const c = C[from?.ci || 0];
+    return /*#__PURE__*/React.createElement("div", {
+      key: swap.id,
+      style: {
+        padding: 12,
+        borderBottom: "1px solid #F0F2F4"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "av",
+      style: {
+        background: c.d,
+        width: 28,
+        height: 28,
+        fontSize: 9
+      }
+    }, from?.av), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12
+      }
+    }, /*#__PURE__*/React.createElement("strong", null, from?.name), " wants ", to ? /*#__PURE__*/React.createElement(React.Fragment, null, "to swap with ", /*#__PURE__*/React.createElement("strong", null, to.name)) : "coverage", " on ", /*#__PURE__*/React.createElement("strong", null, DAYS[swap.day])), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "#888",
+        marginTop: 2
+      }
+    }, "Reason: ", swap.reason)), /*#__PURE__*/React.createElement("span", {
+      className: "tg",
+      style: {
+        background: swap.status === "pending" ? "#FFF3E0" : swap.status === "approved" ? "#E8F5E9" : "#FEE2E2",
+        color: swap.status === "pending" ? "#E65100" : swap.status === "approved" ? "#2E7D32" : "#DC2626",
+        fontWeight: 600
+      }
+    }, swap.status)), swap.status === "pending" && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 6
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      className: "bt bp",
+      style: {
+        fontSize: 10,
+        padding: "5px 12px"
+      },
+      onClick: () => handleSwap(swap.id, "approved")
+    }, Ic.chk, " Approve"), /*#__PURE__*/React.createElement("button", {
+      className: "bt bd",
+      style: {
+        fontSize: 10,
+        padding: "5px 12px"
+      },
+      onClick: () => handleSwap(swap.id, "declined")
+    }, "Decline")));
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "\uD83C\uDFD6 Leave Balances"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: "auto"
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    style: {
+      width: "100%",
+      borderCollapse: "collapse",
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    style: {
+      background: "#F8FAFB",
+      textAlign: "left"
+    }
+  }, /*#__PURE__*/React.createElement("th", {
+    style: {
+      padding: "8px 10px",
+      fontWeight: 600,
+      fontSize: 11
+    }
+  }, "Doctor"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      padding: "8px 6px",
+      textAlign: "center",
+      fontWeight: 600,
+      fontSize: 10
+    }
+  }, "Vacation"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      padding: "8px 6px",
+      textAlign: "center",
+      fontWeight: 600,
+      fontSize: 10
+    }
+  }, "Sick"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      padding: "8px 6px",
+      textAlign: "center",
+      fontWeight: 600,
+      fontSize: 10
+    }
+  }, "Personal"), /*#__PURE__*/React.createElement("th", {
+    style: {
+      padding: "8px 6px",
+      textAlign: "center",
+      fontWeight: 600,
+      fontSize: 10
+    }
+  }, "Total Left"))), /*#__PURE__*/React.createElement("tbody", null, docs.map(doc => {
+    const lb = getLeaveBalance(doc.id);
+    const vacLeft = lb.vacation - lb.used_vacation;
+    const sickLeft = lb.sick - lb.used_sick;
+    const persLeft = lb.personal - lb.used_personal;
+    const totalLeft = vacLeft + sickLeft + persLeft;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: doc.id,
+      style: {
+        borderBottom: "1px solid #F0F2F4"
+      }
+    }, /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: "8px 10px"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "av",
+      style: {
+        background: C[doc.ci].d,
+        width: 24,
+        height: 24,
+        fontSize: 8
+      }
+    }, doc.av), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 500
+      }
+    }, doc.name))), /*#__PURE__*/React.createElement("td", {
+      style: {
+        textAlign: "center",
+        padding: "8px 6px"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: vacLeft <= 2 ? "#DC2626" : "#1a1a2e"
+      }
+    }, vacLeft), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#aaa"
+      }
+    }, "/", lb.vacation)), /*#__PURE__*/React.createElement("td", {
+      style: {
+        textAlign: "center",
+        padding: "8px 6px"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: sickLeft <= 1 ? "#DC2626" : "#1a1a2e"
+      }
+    }, sickLeft), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#aaa"
+      }
+    }, "/", lb.sick)), /*#__PURE__*/React.createElement("td", {
+      style: {
+        textAlign: "center",
+        padding: "8px 6px"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: persLeft === 0 ? "#DC2626" : "#1a1a2e"
+      }
+    }, persLeft), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "#aaa"
+      }
+    }, "/", lb.personal)), /*#__PURE__*/React.createElement("td", {
+      style: {
+        textAlign: "center",
+        padding: "8px 6px"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 700,
+        fontSize: 13,
+        color: totalLeft < 5 ? "#DC2626" : totalLeft < 10 ? "#E65100" : "#2E7D32"
+      }
+    }, totalLeft)));
+  })))))), v === "rai" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "AI Schedule Optimizer"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "Roster analysis & recommendations")), /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: genRosterAI,
+    disabled: aiL
+  }, aiL ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    className: "pu"
+  }, "\uD83E\uDDE0"), " Analyzing...") : /*#__PURE__*/React.createElement(React.Fragment, null, Ic.brain, " Run Analysis"))), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "Provider Capacity"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))",
+      gap: 10
+    }
+  }, docs.map(d => {
+    const h = shifts.filter(s => s.did === d.id).reduce((a, s) => a + (s.e - s.s), 0);
+    const p = Math.round(h / d.max * 100);
+    return /*#__PURE__*/React.createElement("div", {
+      key: d.id,
+      style: {
+        background: "#F8FAFB",
+        borderRadius: 7,
+        padding: 10
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 7,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "av",
+      style: {
+        background: C[d.ci].d,
+        width: 26,
+        height: 26,
+        fontSize: 9
+      }
+    }, d.av), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 600,
+        fontSize: 11.5
+      }
+    }, d.name), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: "#888"
+      }
+    }, d.type, " \xB7 ", d.spec))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 10,
+        color: "#888",
+        marginBottom: 3
+      }
+    }, /*#__PURE__*/React.createElement("span", null, h, "h / ", d.max, "h"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontWeight: 600,
+        color: p > 90 ? "#DC2626" : "#2E7D32"
+      }
+    }, p, "%")), /*#__PURE__*/React.createElement("div", {
+      className: "pg"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "pgb",
+      style: {
+        width: `${Math.min(p, 100)}%`,
+        background: p > 90 ? "#DC2626" : "#2DD4A1"
+      }
+    })));
+  }))), aiL && /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      textAlign: "center",
+      padding: 28
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "pu",
+    style: {
+      fontSize: 32
+    }
+  }, "\uD83E\uDDE0"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#888",
+      fontSize: 12,
+      marginTop: 6
+    }
+  }, "Analyzing coverage patterns...")), aiRes.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "ac"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pr",
+    style: {
+      background: r.priority === "high" ? "#FEE2E2" : r.priority === "medium" ? "#FFF3E0" : "#E3F2FD",
+      color: r.priority === "high" ? "#DC2626" : r.priority === "medium" ? "#E65100" : "#1565C0"
+    }
+  }, r.priority), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12.5,
+      marginBottom: 3
+    }
+  }, r.title), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#555",
+      lineHeight: 1.5
+    }
+  }, r.detail), r.fix && /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      marginTop: 8,
+      fontSize: 10,
+      padding: "6px 14px"
+    },
+    onClick: () => {
+      setShifts(p => [...p, {
+        id: nid.current++,
+        ...r.fix
+      }]);
+      setAiRes(p => p.filter((_, j) => j !== i));
+      fl(r.fix.label || "Fix applied — shift added");
+    }
+  }, Ic.chk, " ", r.fix.label || "Apply Fix"))), !aiL && !aiRes.length && /*#__PURE__*/React.createElement("div", {
+    className: "cd",
+    style: {
+      textAlign: "center",
+      padding: 36
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 32
+    }
+  }, "\uD83E\uDD16"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'Fraunces',serif",
+      fontSize: 16,
+      fontWeight: 600,
+      marginTop: 6
+    }
+  }, "Ready to optimize"))), v === "settings" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "hd"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "tt"
+  }, "AI Settings"), /*#__PURE__*/React.createElement("div", {
+    className: "su"
+  }, "Connect your Claude API key for live AI-powered features"))), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, Ic.key, " Claude API Key"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12.5,
+      color: "#666",
+      lineHeight: 1.6,
+      marginBottom: 14
+    }
+  }, "With an API key, DoctorDash uses real Claude AI to generate SOAP notes, inbox replies, and morning briefs. Without a key, the smart local engine handles everything."), apiKey ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#E8F5E9",
+      border: "1px solid #A5D6A7",
+      borderRadius: 8,
+      padding: 12,
+      marginBottom: 14,
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#2E7D32",
+      fontWeight: 700,
+      fontSize: 18
+    }
+  }, "\u2713"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12.5,
+      color: "#2E7D32"
+    }
+  }, "Live AI Active"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#4CAF50",
+      fontFamily: "'JetBrains Mono',monospace"
+    }
+  }, apiKey.slice(0, 12), "...", apiKey.slice(-4))), /*#__PURE__*/React.createElement("button", {
+    className: "bt bd",
+    style: {
+      marginLeft: "auto",
+      padding: "5px 10px",
+      fontSize: 10
+    },
+    onClick: () => {
+      clearApiKey();
+      setAiMode("local");
+      fl("Key removed — using smart engine", "error");
+    }
+  }, "Remove")) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#FFF3E0",
+      border: "1px solid #FFE0B2",
+      borderRadius: 8,
+      padding: 12,
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12.5,
+      color: "#E65100"
+    }
+  }, "\uD83D\uDD35 Using Smart Local Engine"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#F57C00",
+      marginTop: 3
+    }
+  }, "Add an API key below to upgrade to live Claude AI")), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "API Key"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "text",
+    placeholder: "sk-ant-api03-...",
+    value: apiKeyInput,
+    onChange: e => setApiKeyInput(e.target.value),
+    style: {
+      fontFamily: "'JetBrains Mono',monospace",
+      fontSize: 11.5
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    onClick: () => {
+      const k = apiKeyInput.trim();
+      if (!k || !k.startsWith("sk-ant")) {
+        fl("Enter a valid key starting with sk-ant", "error");
+        return;
+      }
+      saveApiKey(k);
+      setAiMode("live");
+      fl("API key saved permanently!");
+    }
+  }, "Save Key"), apiKey && /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: async () => {
+      fl("Testing connection...");
+      try {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true"
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 100,
+            messages: [{
+              role: "user",
+              content: "Reply with exactly: Connection successful!"
+            }]
+          })
+        });
+        const data = await res.json();
+        if (data.error) {
+          fl("API Error: " + data.error.message, "error");
+        } else if (data.content && data.content[0]) {
+          setAiMode("live");
+          fl("✓ Live AI connected! Response: " + data.content[0].text.slice(0, 50));
+        } else {
+          fl("Unexpected response format", "error");
+        }
+      } catch (e) {
+        fl("Network error: " + e.message, "error");
+      }
+    }
+  }, "Test Connection")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 16,
+      padding: 14,
+      background: "#F8FAFB",
+      borderRadius: 8,
+      fontSize: 11.5,
+      color: "#666",
+      lineHeight: 1.6
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "How to get a key:"), /*#__PURE__*/React.createElement("br", null), "1. Go to ", /*#__PURE__*/React.createElement("strong", null, "console.anthropic.com"), /*#__PURE__*/React.createElement("br", null), "2. Sign up or sign in", /*#__PURE__*/React.createElement("br", null), "3. Go to API Keys \u2192 Create Key", /*#__PURE__*/React.createElement("br", null), "4. Paste it above", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("strong", null, "Cost:"), " ~$0.003\u20130.015 per note generation. Typical daily use costs less than $0.50.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("strong", null, "Privacy:"), " Your key is stored in browser memory only. It is never sent anywhere except directly to Anthropic's API. When you close the tab, the key is gone.")), /*#__PURE__*/React.createElement("div", {
+    className: "cd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ct"
+  }, "How AI Works"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#555",
+      lineHeight: 1.7
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "flex-start",
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 18
+    }
+  }, "\uD83D\uDFE2"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", null, "Live AI Mode"), " (with API key)", /*#__PURE__*/React.createElement("br", null), "SOAP notes, inbox replies, and morning briefs are generated by Claude \u2014 Anthropic's AI model. Each request sends the clinical context to Claude and receives a unique, contextually-aware response. This is true generative AI.")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "flex-start"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 18
+    }
+  }, "\uD83D\uDD35"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", null, "Smart Engine Mode"), " (without API key)", /*#__PURE__*/React.createElement("br", null), "All features work using a built-in clinical rules engine. It parses your notes for vitals, conditions, medications, and generates structured output using medical templates. Reliable and instant, but not generative.")))))), addPt && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => setAddPt(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "Add Patient"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Full Name"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nPt.name,
+    onChange: e => setNPt(p => ({
+      ...p,
+      name: e.target.value
+    })),
+    placeholder: "John Smith"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Age"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "number",
+    value: nPt.age,
+    onChange: e => setNPt(p => ({
+      ...p,
+      age: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Sex"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nPt.sex,
+    onChange: e => setNPt(p => ({
+      ...p,
+      sex: e.target.value
+    }))
+  }, /*#__PURE__*/React.createElement("option", null, "M"), /*#__PURE__*/React.createElement("option", null, "F")))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Conditions (comma sep)"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nPt.conds,
+    onChange: e => setNPt(p => ({
+      ...p,
+      conds: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Medications (comma sep)"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nPt.meds,
+    onChange: e => setNPt(p => ({
+      ...p,
+      meds: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Allergies (comma sep)"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nPt.allg,
+    onChange: e => setNPt(p => ({
+      ...p,
+      allg: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      flex: 1
+    },
+    onClick: addPatient,
+    disabled: !nPt.name
+  }, "Add Patient"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setAddPt(false)
+  }, "Cancel")))), addSh && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => {
+      setAddSh(false);
+      setShiftStartDate("");
+      setShiftEndDate("");
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "Add Shift"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Provider"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.did,
+    onChange: e => setNSh(p => ({
+      ...p,
+      did: +e.target.value
+    }))
+  }, docs.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name, " (", d.type, ")")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      flex: 1,
+      background: !shiftStartDate ? "#1A6B5A" : "#fff",
+      color: !shiftStartDate ? "#fff" : "#555",
+      border: "1px solid #D4E8E0",
+      fontSize: 11
+    },
+    onClick: () => {
+      setShiftStartDate("");
+      setShiftEndDate("");
+    }
+  }, "Single Day"), /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      flex: 1,
+      background: shiftStartDate ? "#1A6B5A" : "#fff",
+      color: shiftStartDate ? "#fff" : "#555",
+      border: "1px solid #D4E8E0",
+      fontSize: 11
+    },
+    onClick: () => {
+      const today = new Date().toISOString().split("T")[0];
+      setShiftStartDate(today);
+      const next = new Date();
+      next.setDate(next.getDate() + 7);
+      setShiftEndDate(next.toISOString().split("T")[0]);
+    }
+  }, "Date Range")), !shiftStartDate ? /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Day (this week)"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.day,
+    onChange: e => setNSh(p => ({
+      ...p,
+      day: +e.target.value
+    }))
+  }, DAYS.map((d, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, d, " \u2014 ", getDateForDay(currentWeekStart, i).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  }))))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "From Date"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "date",
+    value: shiftStartDate,
+    onChange: e => setShiftStartDate(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "To Date"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "date",
+    value: shiftEndDate,
+    onChange: e => setShiftEndDate(e.target.value)
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Apply to Days"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 4,
+      flexWrap: "wrap"
+    }
+  }, DAYS.map((d, i) => /*#__PURE__*/React.createElement("button", {
+    key: i,
+    className: "bt",
+    style: {
+      padding: "5px 10px",
+      fontSize: 10,
+      background: shiftSelectedDays.includes(i) ? "#1A6B5A" : "#fff",
+      color: shiftSelectedDays.includes(i) ? "#fff" : "#555",
+      border: "1px solid #D4E8E0"
+    },
+    onClick: () => setShiftSelectedDays(p => p.includes(i) ? p.filter(x => x !== i) : [...p, i])
+  }, d)))), shiftStartDate && shiftEndDate && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#1A6B5A",
+      fontWeight: 500,
+      marginBottom: 10
+    }
+  }, "Will create shifts on selected days between ", new Date(shiftStartDate).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  }), " and ", new Date(shiftEndDate).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Start Time"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.s,
+    onChange: e => setNSh(p => ({
+      ...p,
+      s: +e.target.value
+    }))
+  }, HRS.map(h => /*#__PURE__*/React.createElement("option", {
+    key: h,
+    value: h
+  }, h, ":00")))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "End Time"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.e,
+    onChange: e => setNSh(p => ({
+      ...p,
+      e: +e.target.value
+    }))
+  }, HRS.filter(h => h > nSh.s).map(h => /*#__PURE__*/React.createElement("option", {
+    key: h,
+    value: h
+  }, h, ":00"))))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Room"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nSh.rm,
+    onChange: e => setNSh(p => ({
+      ...p,
+      rm: e.target.value
+    }))
+  }, RMS.map(r => /*#__PURE__*/React.createElement("option", {
+    key: r
+  }, r)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      flex: 1
+    },
+    onClick: addShift
+  }, shiftStartDate ? "Add Shifts for Date Range" : "Add Shift"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => {
+      setAddSh(false);
+      setShiftStartDate("");
+      setShiftEndDate("");
+    }
+  }, "Cancel")))), addDoc && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => setAddDoc(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "Add Doctor"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Full Name"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: nDoc.name,
+    onChange: e => setNDoc(p => ({
+      ...p,
+      name: e.target.value
+    })),
+    placeholder: "Dr. Jane Smith"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Specialty"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nDoc.spec,
+    onChange: e => setNDoc(p => ({
+      ...p,
+      spec: e.target.value
+    }))
+  }, ["Family Medicine", "Internal Medicine", "Pediatrics", "Cardiology", "Orthopedics", "Dermatology", "OB/GYN", "Psychiatry", "Neurology", "Gastroenterology", "Pulmonology", "Endocrinology", "Ophthalmology", "ENT", "Urology", "General Surgery", "Emergency Medicine", "Radiology", "Anesthesiology", "Other"].map(s => /*#__PURE__*/React.createElement("option", {
+    key: s
+  }, s)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Type"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: nDoc.type,
+    onChange: e => setNDoc(p => ({
+      ...p,
+      type: e.target.value
+    }))
+  }, /*#__PURE__*/React.createElement("option", null, "Staff"), /*#__PURE__*/React.createElement("option", null, "Visiting"), /*#__PURE__*/React.createElement("option", null, "Locum"), /*#__PURE__*/React.createElement("option", null, "Consultant"))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Max Hours/Week"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "number",
+    value: nDoc.max,
+    onChange: e => setNDoc(p => ({
+      ...p,
+      max: e.target.value
+    }))
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      flex: 1
+    },
+    onClick: addDoctor,
+    disabled: !nDoc.name.trim()
+  }, "Add Doctor"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setAddDoc(false)
+  }, "Cancel")))), editSh && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => setEditSh(null)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "Edit Shift"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#F8FAFB",
+      borderRadius: 8,
+      padding: 12,
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 14
+    }
+  }, editSh.docName || docs.find(d => d.id === editSh.did)?.name), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#888",
+      marginTop: 2
+    }
+  }, DAYS[editSh.day], " \xB7 ", formatWeekRange(currentWeekStart))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Start Time"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: editSh.s,
+    onChange: e => setEditSh(p => ({
+      ...p,
+      s: +e.target.value
+    }))
+  }, HRS.map(h => /*#__PURE__*/React.createElement("option", {
+    key: h,
+    value: h
+  }, h, ":00")))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "End Time"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: editSh.e,
+    onChange: e => setEditSh(p => ({
+      ...p,
+      e: +e.target.value
+    }))
+  }, HRS.filter(h => h > editSh.s).map(h => /*#__PURE__*/React.createElement("option", {
+    key: h,
+    value: h
+  }, h, ":00"))))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Room"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: editSh.rm,
+    onChange: e => setEditSh(p => ({
+      ...p,
+      rm: e.target.value
+    }))
+  }, RMS.map(r => /*#__PURE__*/React.createElement("option", {
+    key: r
+  }, r)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      flex: 1
+    },
+    onClick: () => updateShift(editSh.id, {
+      s: editSh.s,
+      e: editSh.e,
+      rm: editSh.rm
+    })
+  }, "Save Changes"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bd",
+    onClick: () => {
+      setShifts(p => p.filter(x => x.id !== editSh.id));
+      setEditSh(null);
+      fl("Shift deleted");
+    }
+  }, "Delete"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setEditSh(null)
+  }, "Cancel")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12,
+      borderTop: "1px solid #E5E9ED",
+      paddingTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      background: "#FFF3E0",
+      color: "#E65100",
+      width: "100%",
+      justifyContent: "center"
+    },
+    onClick: () => {
+      setTimeOff(p => [...p, {
+        id: nid.current++,
+        did: editSh.did,
+        day: editSh.day,
+        wk: currentWeekKey,
+        reason: "Vacation"
+      }]);
+      setShifts(p => p.filter(x => x.id !== editSh.id));
+      setEditSh(null);
+      fl("Shift replaced with time off");
+    }
+  }, "\uD83C\uDFD6 Convert to Time Off")))), addTimeOff && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => {
+      setAddTimeOff(null);
+      setToStartDate("");
+      setToEndDate("");
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "Mark Time Off"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Doctor"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: addTimeOff.did,
+    onChange: e => setAddTimeOff(p => ({
+      ...p,
+      did: +e.target.value
+    }))
+  }, docs.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      flex: 1,
+      background: !toStartDate ? "#DC2626" : "#fff",
+      color: !toStartDate ? "#fff" : "#555",
+      border: "1px solid #FECACA",
+      fontSize: 11
+    },
+    onClick: () => {
+      setToStartDate("");
+      setToEndDate("");
+    }
+  }, "Single Day"), /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      flex: 1,
+      background: toStartDate ? "#DC2626" : "#fff",
+      color: toStartDate ? "#fff" : "#555",
+      border: "1px solid #FECACA",
+      fontSize: 11
+    },
+    onClick: () => {
+      const today = new Date().toISOString().split("T")[0];
+      setToStartDate(today);
+      const next = new Date();
+      next.setDate(next.getDate() + 5);
+      setToEndDate(next.toISOString().split("T")[0]);
+    }
+  }, "Date Range")), !toStartDate ? /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Day"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: addTimeOff.day,
+    onChange: e => setAddTimeOff(p => ({
+      ...p,
+      day: +e.target.value
+    }))
+  }, DAYS.map((d, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, d, " \u2014 ", getDateForDay(currentWeekStart, i).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  }))))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "From Date"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "date",
+    value: toStartDate,
+    onChange: e => setToStartDate(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "To Date"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    type: "date",
+    value: toEndDate,
+    onChange: e => setToEndDate(e.target.value)
+  }))), toStartDate && toEndDate && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#DC2626",
+      fontWeight: 500,
+      marginBottom: 10
+    }
+  }, Math.round((new Date(toEndDate) - new Date(toStartDate)) / 86400000) + 1, " days off from ", new Date(toStartDate).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  }), " to ", new Date(toEndDate).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Reason"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: toReason,
+    onChange: e => setToReason(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", null, "Vacation"), /*#__PURE__*/React.createElement("option", null, "Sick Leave"), /*#__PURE__*/React.createElement("option", null, "Conference"), /*#__PURE__*/React.createElement("option", null, "Personal Day"), /*#__PURE__*/React.createElement("option", null, "Statutory Holiday"), /*#__PURE__*/React.createElement("option", null, "Maternity/Paternity"), /*#__PURE__*/React.createElement("option", null, "Training"), /*#__PURE__*/React.createElement("option", null, "Other"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bd",
+    style: {
+      flex: 1
+    },
+    onClick: addTimeOffFn
+  }, toStartDate ? "Mark Date Range as Off" : "Mark Day as Off"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => {
+      setAddTimeOff(null);
+      setToStartDate("");
+      setToEndDate("");
+    }
+  }, "Cancel")))), showCallout && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => setShowCallout(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "\uD83D\uDEA8 Last-Minute Callout"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#FEF2F2",
+      borderRadius: 8,
+      padding: 12,
+      marginBottom: 14,
+      fontSize: 12,
+      color: "#DC2626"
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Emergency Coverage Tool"), " \u2014 Mark a doctor as calling out and auto-find a replacement"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Who is calling out?"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: calloutDoc || "",
+    onChange: e => setCalloutDoc(+e.target.value)
+  }, docs.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name, " (", d.spec, ")")))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Which day?"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: calloutDay,
+    onChange: e => setCalloutDay(+e.target.value)
+  }, DAYS.map((d, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i
+  }, d, " \u2014 ", getDateForDay(currentWeekStart, i).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  }))))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Reason"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: calloutReason,
+    onChange: e => setCalloutReason(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", null, "Sick"), /*#__PURE__*/React.createElement("option", null, "Family Emergency"), /*#__PURE__*/React.createElement("option", null, "Car Trouble"), /*#__PURE__*/React.createElement("option", null, "Personal Emergency"), /*#__PURE__*/React.createElement("option", null, "Other"))), calloutDoc && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#F8FAFB",
+      borderRadius: 8,
+      padding: 12,
+      marginBottom: 12,
+      fontSize: 11.5
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "AI will automatically:"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6,
+      color: "#555"
+    }
+  }, "1. Remove ", docs.find(d => d.id === calloutDoc)?.name, "'s shift on ", DAYS[calloutDay], /*#__PURE__*/React.createElement("br", null), "2. Mark them as off (", calloutReason, ")", /*#__PURE__*/React.createElement("br", null), "3. Deduct from their leave balance", /*#__PURE__*/React.createElement("br", null), "4. Find the best available replacement and assign them")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt",
+    style: {
+      flex: 1,
+      background: "#DC2626",
+      color: "#fff"
+    },
+    onClick: processCallout
+  }, "Process Callout"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setShowCallout(false)
+  }, "Cancel")))), showSwapModal && /*#__PURE__*/React.createElement("div", {
+    className: "ov",
+    onClick: () => setShowSwapModal(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ml",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mtt"
+  }, "\uD83D\uDD04 Request Shift Swap"), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Doctor requesting swap"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: newSwap.fromId,
+    onChange: e => setNewSwap(p => ({
+      ...p,
+      fromId: +e.target.value
+    }))
+  }, docs.map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name)))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Swap with (optional \u2014 leave blank for open request)"), /*#__PURE__*/React.createElement("select", {
+    className: "sl",
+    value: newSwap.toId || "",
+    onChange: e => setNewSwap(p => ({
+      ...p,
+      toId: e.target.value ? +e.target.value : null
+    }))
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Anyone available"), docs.filter(d => d.id !== newSwap.fromId).map(d => /*#__PURE__*/React.createElement("option", {
+    key: d.id,
+    value: d.id
+  }, d.name)))), /*#__PURE__*/React.createElement("div", {
+    className: "ig"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "lb"
+  }, "Reason"), /*#__PURE__*/React.createElement("input", {
+    className: "ip",
+    value: newSwap.reason,
+    onChange: e => setNewSwap(p => ({
+      ...p,
+      reason: e.target.value
+    })),
+    placeholder: "e.g. CME conference, family event, personal"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "bt bp",
+    style: {
+      flex: 1
+    },
+    onClick: submitSwap,
+    disabled: !newSwap.reason
+  }, "Submit Request"), /*#__PURE__*/React.createElement("button", {
+    className: "bt bs",
+    onClick: () => setShowSwapModal(false)
+  }, "Cancel")))), botOpen && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      bottom: 80,
+      right: 20,
+      width: 340,
+      maxWidth: "90vw",
+      maxHeight: "70vh",
+      background: "#fff",
+      borderRadius: 16,
+      boxShadow: "0 12px 48px rgba(0,0,0,0.15)",
+      border: "1px solid #E5E9ED",
+      display: "flex",
+      flexDirection: "column",
+      zIndex: 2000,
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#0B1D26",
+      color: "#fff",
+      padding: "14px 16px",
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 32,
+      height: 32,
+      borderRadius: 8,
+      background: "#2DD4A1",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: 16
+    }
+  }, "\uD83E\uDD16"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 13
+    }
+  }, "DoctorDash Assistant"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "rgba(255,255,255,0.5)"
+    }
+  }, "Ask me anything about the app")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setBotOpen(false),
+    style: {
+      background: "none",
+      border: "none",
+      color: "rgba(255,255,255,0.6)",
+      fontSize: 18,
+      cursor: "pointer",
+      padding: 4
+    }
+  }, "\u2715")), /*#__PURE__*/React.createElement("div", {
+    ref: botRef,
+    style: {
+      flex: 1,
+      overflowY: "auto",
+      padding: 12,
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+      minHeight: 200,
+      maxHeight: "50vh"
+    }
+  }, botMsgs.map((m, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "flex",
+      justifyContent: m.from === "user" ? "flex-end" : "flex-start"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: "85%",
+      padding: "8px 12px",
+      borderRadius: m.from === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+      background: m.from === "user" ? "#1A6B5A" : "#F3F5F7",
+      color: m.from === "user" ? "#fff" : "#1a1a2e",
+      fontSize: 12,
+      lineHeight: 1.6,
+      whiteSpace: "pre-wrap"
+    }
+  }, m.text.split("**").map((part, j) => j % 2 === 1 ? /*#__PURE__*/React.createElement("strong", {
+    key: j
+  }, part) : part), m.nav && /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setV(m.nav);
+      setBotOpen(false);
+    },
+    style: {
+      display: "block",
+      marginTop: 8,
+      padding: "5px 12px",
+      borderRadius: 6,
+      background: "#2DD4A1",
+      color: "#0B1D26",
+      border: "none",
+      fontSize: 10,
+      fontWeight: 600,
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, "\u2192 Go to ", m.nav === "dash" ? "Dashboard" : m.nav === "soap" ? "SOAP Notes" : m.nav === "inbox" ? "Inbox" : m.nav === "roster" ? "Roster" : m.nav === "hub" ? "Staff Hub" : m.nav === "rai" ? "AI Optimizer" : m.nav === "team" ? "Team" : m.nav === "pts" ? "Patients" : m.nav))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "6px 10px",
+      borderTop: "1px solid #F0F2F4",
+      display: "flex",
+      gap: 4,
+      flexWrap: "wrap"
+    }
+  }, ["SOAP Notes", "Roster", "Callouts", "Voice Recording", "Time Off"].map(q => /*#__PURE__*/React.createElement("button", {
+    key: q,
+    onClick: () => {
+      setBotInput(q);
+      setTimeout(() => {
+        setBotMsgs(p => [...p, {
+          from: "user",
+          text: q
+        }]);
+        const r = botAnswer(q);
+        setTimeout(() => {
+          setBotMsgs(p => [...p, {
+            from: "bot",
+            text: r.answer,
+            nav: r.nav
+          }]);
+          setTimeout(() => {
+            if (botRef.current) botRef.current.scrollTop = botRef.current.scrollHeight;
+          }, 50);
+        }, 400);
+      }, 0);
+    },
+    style: {
+      padding: "3px 8px",
+      borderRadius: 12,
+      border: "1px solid #E5E9ED",
+      background: "#fff",
+      fontSize: 9,
+      color: "#555",
+      cursor: "pointer",
+      fontFamily: "inherit"
+    }
+  }, q))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "8px 10px",
+      borderTop: "1px solid #E5E9ED",
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: botInput,
+    onChange: e => setBotInput(e.target.value),
+    onKeyDown: e => {
+      if (e.key === "Enter") sendBotMsg();
+    },
+    placeholder: "Ask about any feature...",
+    style: {
+      flex: 1,
+      padding: "8px 12px",
+      borderRadius: 8,
+      border: "1px solid #D4D8DD",
+      fontSize: 12,
+      fontFamily: "inherit",
+      outline: "none"
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: sendBotMsg,
+    style: {
+      background: "#2DD4A1",
+      border: "none",
+      borderRadius: 8,
+      padding: "8px 12px",
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center"
+    }
+  }, Ic.send))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setBotOpen(p => !p),
+    style: {
+      position: "fixed",
+      bottom: 20,
+      right: 20,
+      width: 52,
+      height: 52,
+      borderRadius: 16,
+      background: botOpen ? "#1a1a2e" : "#2DD4A1",
+      color: botOpen ? "#fff" : "#0B1D26",
+      border: "none",
+      boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
+      cursor: "pointer",
+      fontSize: 22,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 2001,
+      transition: "all 0.2s"
+    }
+  }, botOpen ? "✕" : "💬"));
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
